@@ -24,7 +24,7 @@ import { sandboxUserInput, secureSandbox, logInjectionAttempt, ANTI_INJECTION_RU
 import { applyBudgets, logTokenUsage, type RankedContent } from "../_shared/token-budget.ts";
 // model-config import removed — all AI calls routed via openai-router.ts (callText/callJSON)
 import { redactPII } from "../_shared/pii-redactor.ts";
-import { dualSearch, formatKBContext, formatPracticeContext as formatPracticeCtx, temporalDisclaimer } from "../_shared/rag-search.ts";
+import { dualSearch, formatKBContext, formatPracticeContext as formatPracticeCtx, temporalDisclaimer, lookupByAnchors } from "../_shared/rag-search.ts";
 import { parseReferencesText, buildUserSourcesBlock } from "../_shared/reference-sources.ts";
 import { recordAiMetric } from "../_shared/ai-metrics.ts";
 import { verifyCitationsInText, type CitationValidation } from "../_shared/citation-verifier.ts";
@@ -36,6 +36,15 @@ import { buildTemporalContextForPrompt } from "../_shared/temporal-validity-engi
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
 import { buildLegalDecisionObject, type LegalDecisionObject } from "../_shared/legal-decision-engine.ts";
 import { saveLegalDecisionSnapshot, type LegalDecisionRepositoryClient } from "../_shared/legal-decision-repository.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { checkRateLimits, computeCost } from "../_shared/rate-limiter.ts";
+import { mapReduceSummarize } from "../_shared/map-reduce-summarizer.ts";
+import { uint8ToBase64 } from "../_shared/base64.ts";
+import { parseDocx } from "../_shared/docx-parser.ts";
+import { runLegalPipeline } from "../_shared/legal-pipeline-orchestrator.ts";
+import { extractNormRefs } from "../_shared/norm-ref-extractor.ts";
+import { callText, callJSON } from "../_shared/openai-router.ts";
+import { runFinalLegalQA as runFinalLegalQAFn } from "../_shared/final-legal-qa-agent.ts";
 
 /** Safe wrapper for PII redaction with fail-closed behavior */
 function safeRedactPII(text: string | null | undefined): string {
@@ -411,7 +420,6 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // === RATE LIMITING (P0) ===
-    const { checkRateLimits } = await import("../_shared/rate-limiter.ts");
     const rateCheck = await checkRateLimits(supabase, user.id, "ai-analyze");
     if (!rateCheck.allowed) {
       return new Response(
@@ -556,7 +564,6 @@ serve(async (req) => {
         const transFileIds = new Set(transcriptions?.map((t) => t.file_id) || []);
 
         // === Map-Reduce for large document content ===
-        const { mapReduceSummarize } = await import("../_shared/map-reduce-summarizer.ts");
 
         // Process OCR results
         if (!ocrError && ocrResults && ocrResults.length > 0) {
@@ -639,7 +646,7 @@ serve(async (req) => {
                   } else if (fileContentsForVision.length >= MAX_VISION_IMAGES) {
                     console.warn(`[ai-analyze] Vision image limit (${MAX_VISION_IMAGES}) reached, skipping ${fileName}`);
                   } else {
-                    const base64 = (await import("../_shared/base64.ts")).uint8ToBase64(bytes);
+                    const base64 = uint8ToBase64(bytes);
 
                     fileContentsForVision.push({
                       name: fileName,
@@ -658,7 +665,6 @@ serve(async (req) => {
                 if (!downloadError && fileData) {
                   try {
                     const buffer = await fileData.arrayBuffer();
-                    const { parseDocx } = await import("../_shared/docx-parser.ts");
                     const docxResult = await parseDocx(buffer);
                     if (docxResult.text) {
                       const mrResult = await mapReduceSummarize(docxResult.text);
@@ -722,7 +728,6 @@ serve(async (req) => {
     console.log(`[AI_ANALYZE] Loaded case materials before RAG: fullCaseText=${fullCaseText.length} chars`);
 
     // Import orchestrator
-    const { runLegalPipeline } = await import("../_shared/legal-pipeline-orchestrator.ts");
 
     let cachedRagResult: unknown = null;
     let preciseSources: any[] = [];
@@ -736,8 +741,6 @@ serve(async (req) => {
         // ====================================================================
         // PHASE 1.5: Extract norm anchors from case materials for precise lookup
         // ====================================================================
-        const { extractNormRefs } = await import("../_shared/norm-ref-extractor.ts");
-        const { lookupByAnchors } = await import("../_shared/rag-search.ts");
         const MAX_ANCHORS = Number(Deno.env.get("MAX_ANCHORS")) || 50;
         const MAX_QUERY_LENGTH = Number(Deno.env.get("MAX_QUERY_LENGTH")) || 2000;
         const allAnchors = opts.engine.retrieval_plan.norm_anchors.length > 0
@@ -1080,7 +1083,6 @@ Please provide your professional legal analysis from your designated role perspe
     }
 
     // Route via centralized OpenAI router (supports multimodal content arrays)
-    const { callText, callJSON } = await import("../_shared/openai-router.ts");
 
     let aiResponseText: string;
     let structuredJson: unknown = null;
@@ -1201,8 +1203,6 @@ Please provide your professional legal analysis from your designated role perspe
     // Second pipeline call: reuse cached RAG, add all QA deps + generatedText.
     // Runs after LLM; QA stages (5-7) operate on the generated text.
     // Does NOT change prompts, roles, RAG, DB, or UI.
-    const { runFinalLegalQA: runFinalLegalQAFn } = await import("../_shared/final-legal-qa-agent.ts");
-
     const textToVerify = structuredJson != null ? JSON.stringify(structuredJson) : aiResponseText;
 
     const qaDepsMixed: any = {
@@ -1514,7 +1514,6 @@ Please provide your professional legal analysis from your designated role perspe
     const tokensUsed = aiResponse.usage?.total_tokens || 0;
     const inputTokens = aiResponse.usage?.prompt_tokens || Math.round(tokensUsed * 0.7);
     const outputTokens = aiResponse.usage?.completion_tokens || Math.round(tokensUsed * 0.3);
-    const { computeCost } = await import("../_shared/rate-limiter.ts");
     const { cost_usd: estimatedCost } = computeCost(modelUsed, inputTokens, outputTokens);
 
     await recordAiMetric(supabase, {

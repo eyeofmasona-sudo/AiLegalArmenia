@@ -2,6 +2,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 // model-config import removed — all AI calls routed via gateway-bypass.ts → openai-router.ts
 import { handleCors } from "../_shared/edge-security.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { mapReduceSummarize } from "../_shared/map-reduce-summarizer.ts";
+import { parseDocx } from "../_shared/docx-parser.ts";
+import { uint8ToBase64 } from "../_shared/base64.ts";
+import { callGatewayBypass } from "../_shared/gateway-bypass.ts";
 
 const SYSTEM_PROMPT = [
   "\u0534\u0578\u0582 AI LEGAL ARMENIA \u056B\u0580\u0561\u057E\u0561\u056F\u0561\u0576 \u057E\u0565\u0580\u056C\u0578\u0582\u056E\u0561\u0562\u0561\u0576 \u0565\u057D \u0540\u0561\u0575\u0561\u057D\u057F\u0561\u0576\u056B \u0540\u0561\u0576\u0580\u0561\u057A\u0565\u057F\u0578\u0582\u0569\u0575\u0561\u0576 \u0563\u0578\u0580\u056E\u0565\u0580\u056B \u0570\u0561\u0574\u0561\u0580\u055D",
@@ -148,7 +153,6 @@ serve(async (req) => {
     }
 
     // === Map-Reduce for large OCR/transcription content ===
-    const { mapReduceSummarize } = await import("../_shared/map-reduce-summarizer.ts");
 
     if (ocrResults && ocrResults.length > 0) {
       context += "\n\n=== OCR EXTRACTED TEXT ===";
@@ -252,7 +256,6 @@ serve(async (req) => {
             console.log(`DOCX downloaded: ${bytes.length} bytes`);
 
             try {
-              const { parseDocx } = await import("../_shared/docx-parser.ts");
               const docxResult = await parseDocx(arrayBuffer);
               const docxText = docxResult.text;
               // Use Map-Reduce for large DOCX files
@@ -305,7 +308,6 @@ serve(async (req) => {
             continue;
           }
 
-          const { uint8ToBase64 } = await import("../_shared/base64.ts");
           const base64 = uint8ToBase64(bytes);
           const dataUrl = `data:${mimeType};base64,${base64}`;
 
@@ -347,7 +349,6 @@ serve(async (req) => {
     console.log("Calling AI for extraction with", userMessageContent.length, "content parts...");
 
     // Route via centralized gateway-bypass (tool_calling requires bypass)
-    const { callGatewayBypass } = await import("../_shared/gateway-bypass.ts");
 
     const bypassResult = await callGatewayBypass(
       [

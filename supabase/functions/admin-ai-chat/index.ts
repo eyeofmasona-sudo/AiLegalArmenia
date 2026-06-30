@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors } from "../_shared/edge-security.ts";
 import { hasUserRole } from "../_shared/roles.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { callStreamBypass } from "../_shared/gateway-bypass.ts";
 
 const SYSTEM_PROMPT = `Ты — продвинутый генератор системных промптов. Твоя задача — превращать краткие описания задач или запросы пользователя в детализированные, структурированные системные промпты для языковых моделей.
 
@@ -84,7 +86,6 @@ serve(async (req) => {
     const { messages } = await req.json();
 
     // === STREAMING VIA CENTRALIZED GATEWAY-BYPASS ===
-    const { callStreamBypass } = await import("../_shared/gateway-bypass.ts");
 
     const streamResult = await callStreamBypass(
       [

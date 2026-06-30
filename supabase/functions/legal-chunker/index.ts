@@ -8,6 +8,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { handleCors, checkInternalAuth, checkInputSize } from "../_shared/edge-security.ts";
 import { chunkDocument } from "../_shared/chunker.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { err as logErr } from "../_shared/safe-logger.ts";
 
 // Re-export for tests
 export { chunkDocument, extractCaseNumber, parentKey, cleanupText } from "../_shared/chunker.ts";
@@ -63,7 +65,6 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    const { err: logErr } = await import("../_shared/safe-logger.ts");
     logErr("legal-chunker", "Unhandled error", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),

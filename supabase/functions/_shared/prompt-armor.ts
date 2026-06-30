@@ -2,6 +2,8 @@
 // PROMPT ARMOR — Anti-injection, input sandboxing, JSON validation & repair
 // Shared across all AI edge functions
 // =============================================================================
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { callGatewayBypass } from "./gateway-bypass.ts";
 
 // ---------------------------------------------------------------------------
 // Injection Detection Patterns
@@ -340,7 +342,6 @@ export async function attemptJsonRepair(
   _model = "google/gemini-2.5-flash-lite"
 ): Promise<LegalAnswerSchema | null> {
   try {
-    const { callGatewayBypass } = await import("./gateway-bypass.ts");
     const repairPrompt = buildRepairPrompt(rawOutput, errors);
 
     const bypassResult = await callGatewayBypass(

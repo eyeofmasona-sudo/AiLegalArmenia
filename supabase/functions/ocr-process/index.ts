@@ -4,6 +4,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 import { redactForLog } from "../_shared/pii-redactor.ts";
 import { parseDocx } from "../_shared/docx-parser.ts";
 import { recordAiMetric } from "../_shared/ai-metrics.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { checkRateLimits } from "../_shared/rate-limiter.ts";
+import { uint8ToBase64 } from "../_shared/base64.ts";
+import { callGatewayBypass } from "../_shared/gateway-bypass.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -157,7 +161,6 @@ serve(async (req) => {
     }
 
     // === RATE LIMITING (P0) ===
-    const { checkRateLimits } = await import("../_shared/rate-limiter.ts");
     const supabaseServiceClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -305,7 +308,6 @@ serve(async (req) => {
     } else if (!imageContent && fileBuffer) {
       // PDF or image from URL → base64
       const bytes = new Uint8Array(fileBuffer);
-      const { uint8ToBase64 } = await import("../_shared/base64.ts");
       const base64 = uint8ToBase64(bytes);
 
       let mimeType = 'image/jpeg';
@@ -356,7 +358,6 @@ serve(async (req) => {
     }
 
     // ─── Call AI ────────────────────────────────────────────────────────
-    const { callGatewayBypass } = await import("../_shared/gateway-bypass.ts");
     const bypassResult = await callGatewayBypass(messages, {
       functionName: "ocr-process",
       bypassReason: "multimodal",

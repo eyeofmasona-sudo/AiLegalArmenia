@@ -18,7 +18,8 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { useToast } from '@/hooks/use-toast';
-import { Shield, Loader2 } from 'lucide-react';
+import { Shield, Loader2, UserPlus } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required').max(50),
@@ -192,9 +193,18 @@ const AdminLogin = () => {
         </CardContent>
       </Card>
 
-      <p className="mt-6 text-center text-sm text-muted-foreground">
-        Սա պաշտպանված տարածք է։ Չթույլատրված մուտքը արգելվում է։
-      </p>
+      <div className="mt-6 flex flex-col items-center gap-3">
+        <p className="text-center text-sm text-muted-foreground">
+          Սա պաշտպանված տարածք է։ Չթույլատրված մուտքը արգելվում է։
+        </p>
+        <Link
+          to="/register"
+          className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+        >
+          <UserPlus className="h-4 w-4" />
+          Գրանցվել նոր հաշիվ
+        </Link>
+      </div>
     </div>
   );
 };

@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 import { handleCors } from "../_shared/edge-security.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { mapReduceSummarize } from "../_shared/map-reduce-summarizer.ts";
+import { callGatewayBypass } from "../_shared/gateway-bypass.ts";
 
 const COURTS_MAP: Record<string, string> = {
   "\u0544\u0549\u0535\u0534": "\u0544\u0561\u0580\u0564\u0578\u0582 \u056b\u0580\u0561\u057e\u0578\u0582\u0576\u0584\u0576\u0565\u0580\u056b \u0565\u057e\u0580\u043e\u043f\u0561\u056f\u0561\u0576 \u0564\u0561\u057f\u0561\u0580\u0561\u0576 (\u0544\u0549\u0535\u0534)",
@@ -190,7 +193,6 @@ serve(async (req) => {
 
     // Build user prompt — apply per-file map-reduce if any file exceeds 110K chars
     const PER_FILE_CHAR_LIMIT = 110_000;
-    const { mapReduceSummarize } = await import("../_shared/map-reduce-summarizer.ts");
     
     const processedParts: string[] = [];
     for (const part of textParts) {
@@ -216,7 +218,6 @@ serve(async (req) => {
     ];
 
     // --- Call AI ---
-    const { callGatewayBypass } = await import("../_shared/gateway-bypass.ts");
 
     const result = await callGatewayBypass(
       [

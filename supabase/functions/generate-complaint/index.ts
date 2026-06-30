@@ -7,7 +7,7 @@ import { validateRequest } from "./validators.ts";
 import { dualSearch } from "../_shared/rag-search.ts";
 import { parseReferencesText, buildUserSourcesBlock } from "../_shared/reference-sources.ts";
 import { buildSearchQuery, mapCourtTypeToPracticeCategory } from "./rag-search.ts";
-import { redactForLog } from "../_shared/pii-redactor.ts";
+import { redactForLog, redactAIOutput } from "../_shared/pii-redactor.ts";
 import { log, err } from "../_shared/safe-logger.ts";
 import { verifyCitationsInText, type CitationValidation } from "../_shared/citation-verifier.ts";
 import { buildLegalCorePrompt, LEGAL_CORE_RESPONSE_HEADER } from "../_shared/legal-core-prompt.ts";
@@ -15,6 +15,10 @@ import { buildLegalReasoningContext, buildReasoningSearchQuery, runLegalReasonin
 import { buildTemporalContextForPrompt } from "../_shared/temporal-validity-engine.ts";
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
 import { isQABlocked, QA_BLOCK_MESSAGE_HY, type FinalLegalQALike } from "../_shared/qa-block-guard.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { checkRateLimits } from "../_shared/rate-limiter.ts";
+import { runLegalPipeline } from "../_shared/legal-pipeline-orchestrator.ts";
+import { runFinalLegalQA as runFinalLegalQAFn } from "../_shared/final-legal-qa-agent.ts";
 
 // =============================================================================
 // CORS HEADERS (wildcard for browser compatibility)
@@ -59,7 +63,6 @@ serve(async (req) => {
     const supabaseServiceUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const serviceClient = createClient(supabaseServiceUrl, supabaseServiceRoleKey);
-    const { checkRateLimits } = await import("../_shared/rate-limiter.ts");
     const rateCheck = await checkRateLimits(serviceClient, user.id, "generate-complaint");
     if (!rateCheck.allowed) {
       return new Response(
@@ -120,7 +123,6 @@ serve(async (req) => {
     const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     
     // Import orchestrator
-    const { runLegalPipeline } = await import("../_shared/legal-pipeline-orchestrator.ts");
 
     let kbContext = "";
     let legalPracticeContext = "";
@@ -327,7 +329,6 @@ ${userSourcesBlock ? "When user-selected sources are provided, you MUST cite the
 
     // Optional: redact PII from AI output when user requests anonymized draft
     if (anonymize && generatedContent) {
-      const { redactAIOutput } = await import("../_shared/pii-redactor.ts");
       generatedContent = redactAIOutput(generatedContent);
       log("generate-complaint", "Anonymized output");
     }
@@ -364,7 +365,6 @@ ${userSourcesBlock ? "When user-selected sources are provided, you MUST cite the
 
     // ── Phase 6.9: QA Chain ─────────────────────────────────────────────────
     // Second pipeline call: reuse cached RAG, add all QA deps + generatedText.
-    const { runFinalLegalQA: runFinalLegalQAFn } = await import("../_shared/final-legal-qa-agent.ts");
 
     const qaDeps: any = {
       runRAG: async () =>

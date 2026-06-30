@@ -14,6 +14,7 @@ import {
   runLegalReasoningEngine,
   buildReasoningSearchQuery,
   buildLegalReasoningContext,
+  buildCuratedLegalReasoningContext,
   type LegalReasoningInput,
   type LegalReasoningOutput,
 } from "./legal-reasoning-engine.ts";
@@ -304,9 +305,6 @@ export async function runPromptBuildStage(
   }
 
   try {
-    const { buildCuratedLegalReasoningContext } = await import(
-      "./legal-reasoning-engine.ts"
-    );
     const curatedContext = result.reasoning
       ? buildCuratedLegalReasoningContext(result.reasoning)
       : "";

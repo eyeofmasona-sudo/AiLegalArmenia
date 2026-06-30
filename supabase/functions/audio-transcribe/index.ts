@@ -2,6 +2,9 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 import { handleCors } from "../_shared/edge-security.ts";
 import { recordAiMetric } from "../_shared/ai-metrics.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { checkRateLimits } from "../_shared/rate-limiter.ts";
+import { callGatewayBypass } from "../_shared/gateway-bypass.ts";
 
 const CONFIDENCE_THRESHOLD = 0.50;
 const MAX_FILE_SIZE_MB = 25;
@@ -33,7 +36,6 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
-    const { checkRateLimits } = await import("../_shared/rate-limiter.ts");
     const rateCheck = await checkRateLimits(supabase, authUser.id, "audio-transcribe");
     if (!rateCheck.allowed) {
       return new Response(JSON.stringify({ error: rateCheck.message }), {
@@ -102,7 +104,6 @@ serve(async (req) => {
     // Passing the signed Storage URL directly lets the provider fetch the
     // file via HTTP. Supabase Storage serves it with Content-Type: audio/mp4 (set at
     // upload time), which is an authoritative server header the gateway accepts.
-    const { callGatewayBypass } = await import("../_shared/gateway-bypass.ts");
     console.log("Sending to AI via centralized gateway-bypass (multimodal audio URL)...");
 
     const bypassResult = await callGatewayBypass(

@@ -25,6 +25,7 @@ const AudioTranscriptions = lazy(() => import("./pages/AudioTranscriptions"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const KBDocumentDetail = lazy(() => import("./pages/KBDocumentDetail"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
+const Register = lazy(() => import("./pages/Register"));
 const AdminPanel = lazy(() => import("./pages/AdminPanel"));
 const MyDocuments = lazy(() => import("./pages/MyDocuments"));
 
@@ -149,6 +150,14 @@ const App = () => (
               element={
                 <Suspense fallback={<PageLoader />}>
                   <AdminLogin />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/register"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <Register />
                 </Suspense>
               }
             />

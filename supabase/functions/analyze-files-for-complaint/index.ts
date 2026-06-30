@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // model-config import removed — all AI calls routed via openai-router.ts (callText)
 import { handleCors } from "../_shared/edge-security.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { callText, type RouterMessage } from "../_shared/openai-router.ts";
 
 interface AnalyzeRequest {
   files: Array<{
@@ -133,12 +135,11 @@ serve(async (req) => {
     messages.push({ role: "user", content: userContent });
 
     // Route via centralized OpenAI router
-    const { callText } = await import("../_shared/openai-router.ts");
 
     let analysis: string;
     let tokensUsed = 0;
     try {
-      const result = await callText("analyze-files-for-complaint", messages as import("../_shared/openai-router.ts").RouterMessage[]);
+      const result = await callText("analyze-files-for-complaint", messages as RouterMessage[]);
       analysis = result.text;
       tokensUsed = result.usage?.total_tokens ?? 0;
       console.log("Analysis complete, length:", analysis.length, "model:", result.model_used);

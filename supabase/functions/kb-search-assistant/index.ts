@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 // model-config import removed — all AI calls routed via openai-router.ts (callText)
 import { handleCors } from "../_shared/edge-security.ts";
 import { recordAiMetric } from "../_shared/ai-metrics.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { callText, getModelConfig as _getModelConfig } from "../_shared/openai-router.ts";
 
 interface KBSearchResult {
   id: string;
@@ -89,7 +91,6 @@ serve(async (req) => {
     
     try {
       // Route via centralized OpenAI router
-      const { callText } = await import("../_shared/openai-router.ts");
       const kbResult = await callText("kb-search-assistant", [
         { role: "system", content: SEARCH_ASSISTANT_SYSTEM_PROMPT },
         { role: "user", content: query },
@@ -207,7 +208,6 @@ serve(async (req) => {
 
     // Log API usage
     try {
-      const { getModelConfig: _getModelConfig } = await import("../_shared/openai-router.ts");
       const kbCfg = _getModelConfig("kb-search-assistant");
       await recordAiMetric(supabase, {
         fnName: "kb-search-assistant",

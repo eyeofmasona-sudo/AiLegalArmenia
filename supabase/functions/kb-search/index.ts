@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
 import { log, warn, err } from "../_shared/safe-logger.ts";
 
 import { handleCors } from "../_shared/edge-security.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { checkRateLimits } from "../_shared/rate-limiter.ts";
 
 // в”Ђв”Ђв”Ђ Types в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -135,7 +137,6 @@ serve(async (req) => {
     const supabaseServiceUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const serviceClient = createClient(supabaseServiceUrl, supabaseServiceRoleKey);
-    const { checkRateLimits } = await import("../_shared/rate-limiter.ts");
     const rateCheck = await checkRateLimits(serviceClient, userData.user.id, "kb-search");
     if (!rateCheck.allowed) {
       return new Response(

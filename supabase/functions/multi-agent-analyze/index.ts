@@ -19,6 +19,10 @@ import { runFinalLegalQA, type FinalLegalQAResult } from "../_shared/final-legal
 import { buildLegalCorePrompt, LEGAL_CORE_RESPONSE_HEADER } from "../_shared/legal-core-prompt.ts";
 import { isQABlocked, QA_BLOCK_MESSAGE_HY, buildBlockedAgentResult } from "../_shared/qa-block-guard.ts";
 import { buildLegalReasoningContext } from "../_shared/legal-reasoning-engine.ts";
+// Phase 8.1: converted from dynamic import for reliable Supabase bundler detection.
+import { callText } from "../_shared/openai-router.ts";
+import { computeCost, computeCost as computeMultiAgentCost } from "../_shared/rate-limiter.ts";
+import { mapReduceSummarize } from "../_shared/map-reduce-summarizer.ts";
 
 import { handleCors } from "../_shared/edge-security.ts";
 
@@ -859,7 +863,6 @@ serve(async (req) => {
         agentSystemPrompt += "\nWhen user-selected sources are provided, you MUST cite them by docId and chunkIndex in your analysis. These sources are mandatory references.\n";
       }
 
-      const { callText } = await import("../_shared/openai-router.ts");
       const synthResult = await callText("multi-agent-analyze", [
         { role: "system", content: agentSystemPrompt },
         { role: "user", content: synthesisContext },
@@ -874,7 +877,6 @@ serve(async (req) => {
       const synthTokens = synthResult.usage?.total_tokens ?? 0;
       const synthInputTokens = synthResult.usage?.prompt_tokens ?? Math.round(synthTokens * 0.7);
       const synthOutputTokens = synthResult.usage?.completion_tokens ?? Math.round(synthTokens * 0.3);
-      const { computeCost } = await import("../_shared/rate-limiter.ts");
       const { cost_usd: synthCostUsd } = computeCost(synthResult.model_used, synthInputTokens, synthOutputTokens);
       await recordAiMetric(supabase, {
         fnName: "multi-agent-analyze",
@@ -1041,7 +1043,6 @@ serve(async (req) => {
         fileSystemPrompt += "\n\nWhen user-selected sources are provided, you MUST cite them by docId and chunkIndex in your analysis. These sources are mandatory references.\n";
       }
 
-      const { callText } = await import("../_shared/openai-router.ts");
       const fileResult = await callText("multi-agent-analyze", [
         { role: "system", content: fileSystemPrompt },
         { role: "user", content: fileContext },
@@ -1056,7 +1057,6 @@ serve(async (req) => {
       const fileTokens = fileResult.usage?.total_tokens ?? 0;
       const fileInputTokens = fileResult.usage?.prompt_tokens ?? Math.round(fileTokens * 0.7);
       const fileOutputTokens = fileResult.usage?.completion_tokens ?? Math.round(fileTokens * 0.3);
-      const { computeCost } = await import("../_shared/rate-limiter.ts");
       const { cost_usd: fileCostUsd } = computeCost(fileResult.model_used, fileInputTokens, fileOutputTokens);
       await recordAiMetric(supabase, {
         fnName: "multi-agent-analyze",
@@ -1204,7 +1204,6 @@ serve(async (req) => {
 
     // Add volume content
     // === Map-Reduce for large volume OCR content ===
-    const { mapReduceSummarize } = await import("../_shared/map-reduce-summarizer.ts");
 
     if (volumes && volumes.length > 0) {
       contextParts.push("\n\u054f\u0548\u0544\u0535\u0550:");
@@ -1292,7 +1291,6 @@ serve(async (req) => {
       (userSourcesBlock ? "\n\nWhen user-selected sources are provided, you MUST cite them by docId and chunkIndex in your analysis. These sources are mandatory references.\n" : "");
 
     // Route via centralized OpenAI router
-    const { callText } = await import("../_shared/openai-router.ts");
 
     let content: string;
     let tokensUsed = 0;
@@ -1344,7 +1342,6 @@ serve(async (req) => {
     }
 
     // Log usage
-    const { computeCost: computeMultiAgentCost } = await import("../_shared/rate-limiter.ts");
     const inputTokensEst = usage?.prompt_tokens || Math.round(tokensUsed * 0.7);
     const outputTokensEst = usage?.completion_tokens || Math.round(tokensUsed * 0.3);
     const { cost_usd: multiAgentCostUsd } = computeMultiAgentCost(modelUsed, inputTokensEst, outputTokensEst);
