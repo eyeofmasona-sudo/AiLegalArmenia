@@ -51,3 +51,7 @@ temp/
 
 # Local sqlite caches
 *.sqlite
+
+# FUSE temp files
+.fuse_hidden*
+**/.fuse_hidden*

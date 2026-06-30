@@ -187,4 +187,49 @@ export async function computeDecisionSupersession(
   client: SupabaseLikeClient,
   caseId: string,
 ): Promise<LegalDecisionRepositoryResult<LegalDecisionRow>> {
-  return await getLatestLegalD
+  return await getLatestLegalDecision(client, caseId);
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+function legalDecisionsTable(client: SupabaseLikeClient): LegalDecisionQueryBuilder {
+  const scoped = typeof client.schema === "function" ? client.schema("app") : client;
+  return scoped.from("legal_decisions");
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Converts the JSONB object returned by app.save_legal_decision_atomic
+ * into a typed LegalDecisionRow.  The function returns snake_case keys
+ * matching the column names exactly.
+ */
+function rpcRowToDecisionRow(row: Record<string, unknown>): LegalDecisionRow {
+  return {
+    id: row["id"] as string,
+    case_id: row["case_id"] as string,
+    version_hash: row["version_hash"] as string,
+    decision_status: row["decision_status"] as LegalDecisionStatus,
+    decision_data: row["decision_data"] as LegalDecisionObject,
+    source_pipeline_version: (row["source_pipeline_version"] as string | null) ?? null,
+    created_by: (row["created_by"] as string | null) ?? null,
+    created_at: row["created_at"] as string,
+    supersedes_decision_id: (row["supersedes_decision_id"] as string | null) ?? null,
+    is_latest: row["is_latest"] as boolean,
+  };
+}
+
+function saveError(
+  error: unknown,
+  supersededDecisionId: string | null = null,
+): SaveLegalDecisionResult {
+  return {
+    data: null,
+    error,
+    inserted: false,
+    duplicate: false,
+    superseded_decision_id: supersededDecisionId,
+  };
+}

@@ -1426,4 +1426,151 @@ Please provide your professional legal analysis from your designated role perspe
           // Fix common JSON issues
           cleaned = cleaned
             .replace(/,\s*}/g, "}") // Remove trailing commas
-      
+            .replace(/,\s*]/g, "]")
+            .replace(/[\x00-\x1F\x7F]/g, ""); // Remove control characters
+
+          try {
+            aiResponse = JSON.parse(cleaned);
+          } catch (secondError) {
+            console.error("JSON recovery failed:", secondError);
+            // Return a fallback response instead of crashing
+            return new Response(
+              JSON.stringify({
+                role,
+                analysis: "\u054E\u0565\u0580\u056C\u0578\u0582\u056E\u0578\u0582\u0569\u0575\u0578\u0582\u0576\u0568 \u0579\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0574\u0565\u056E \u0567\u0580: \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0576\u0578\u0580\u056B\u0581 \u0583\u0578\u0580\u0571\u0565\u056C \u0561\u057E\u0565\u056C\u056B \u0584\u056B\u0579 \u0583\u0561\u057D\u057F\u0561\u0569\u0572\u0569\u0565\u0580\u0578\u057E \u056F\u0561\u0574 \u0561\u057E\u0565\u056C\u056B \u057A\u0561\u0580\u0566 \u0570\u0561\u0580\u0581\u0578\u057E:",
+                sources: [],
+              model_used: modelUsed,
+                warning: "Response was truncated",
+                decision: decisionSummary,
+                ...(decisionRepositoryError ? { decision_repository_error: decisionRepositoryError } : {}),
+              }),
+              {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+        } else {
+          console.error("No valid JSON structure found in response");
+          return new Response(
+            JSON.stringify({
+              role,
+              analysis: "AI-\u056B \u057A\u0561\u057F\u0561\u057D\u056D\u0561\u0576\u0568 \u0569\u0565\u0580\u056B \u0567\u0580: \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0576\u0578\u0580\u056B\u0581 \u0583\u0578\u0580\u0571\u0565\u056C:",
+              sources: [],
+              model_used: modelUsed,
+              warning: "Invalid response structure",
+              decision: decisionSummary,
+              ...(decisionRepositoryError ? { decision_repository_error: decisionRepositoryError } : {}),
+            }),
+            {
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+      }
+    } catch (fetchError) {
+      console.error("Error reading AI response:", fetchError);
+      throw new Error("Failed to read AI response");
+    }
+
+    let analysisText = aiResponse.choices?.[0]?.message?.content || "";
+
+    // Check for truncation indicators
+    if (analysisText.endsWith("...") || analysisText.endsWith("\u2026")) {
+      analysisText +=
+        "\n\n[\u0546\u0577\u0578\u0582\u0574: \u054A\u0561\u057F\u0561\u057D\u056D\u0561\u0576\u0568 \u056F\u0561\u0580\u0578\u0572 \u0567 \u056F\u0580\u0573\u0561\u057F\u057E\u0561\u056E \u056C\u056B\u0576\u0565\u056C: \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0583\u0578\u0580\u0571\u0565\u056C \u0576\u0578\u0580\u056B\u0581 \u0561\u057E\u0565\u056C\u056B \u0584\u056B\u0579 \u0583\u0561\u057D\u057F\u0561\u0569\u0572\u0569\u0565\u0580\u0578\u057E:]";
+    }
+
+    // Add legal disclaimer
+    analysisText = blockAnalysisForFinalQA ? FINAL_LEGAL_QA_BLOCKED_ANALYSIS_HY : analysisText + DISCLAIMER_HY;
+
+    // Save to database if caseId provided
+    if (caseId) {
+      const userId = user.id;
+
+      // Determine the role/analysis_type to store
+      let roleToStore: string;
+      if (role === "criminal_module" && moduleId) {
+        // Legacy criminal module format
+        roleToStore = `criminal_module:${moduleId}`;
+      } else if (isValidAnalysisType(role)) {
+        // New 9-module analysis system - store analysis type directly
+        roleToStore = role;
+      } else {
+        // Legacy role-based analysis
+        roleToStore = role;
+      }
+
+      await supabase.from("ai_analysis").insert({
+        case_id: caseId,
+        role: roleToStore,
+        prompt_used: redactPII(userMessage.substring(0, 2000)),
+        response_text: analysisText,
+        sources_used: sourcesUsed.length > 0 ? sourcesUsed : null,
+        created_by: userId,
+      });
+    }
+
+    // Log API usage for cost tracking
+    const tokensUsed = aiResponse.usage?.total_tokens || 0;
+    const inputTokens = aiResponse.usage?.prompt_tokens || Math.round(tokensUsed * 0.7);
+    const outputTokens = aiResponse.usage?.completion_tokens || Math.round(tokensUsed * 0.3);
+    const { computeCost } = await import("../_shared/rate-limiter.ts");
+    const { cost_usd: estimatedCost } = computeCost(modelUsed, inputTokens, outputTokens);
+
+    await recordAiMetric(supabase, {
+      fnName: "ai-analyze",
+      model: modelUsed,
+      inputTokens,
+      outputTokens,
+      totalTokens: tokensUsed,
+      costUsd: estimatedCost,
+      status: "success",
+      caseId: caseId || null,
+      userId: user.id,
+    });
+
+    // === Citation Guard — now from Orchestrator v2 QA chain (Phase 6.10) ===
+    if (citationValidation && !citationValidation.citations_verified) {
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(), lvl: "warn", fn: "ai-analyze",
+        msg: "CITATION_GUARD: unverified citations", role,
+      }));
+    }
+
+    return new Response(
+      JSON.stringify({
+        role,
+        moduleId: moduleId || null,
+        analysis: analysisText,
+        sources: sourcesUsed,
+        model_used: modelUsed,
+        ...LEGAL_CORE_RESPONSE_HEADER,
+        temporal_validity_checked: !!referenceDate,
+        ...(temporalWarning ? { temporal_warning: temporalWarning } : {}),
+        legal_reasoning: legalReasoning,
+        // QA metadata — from Orchestrator v2 (Phase 6.10)
+        validation: citationValidation,
+        verified_citations: citationValidation?.verified_citations,
+        weak_citations: citationValidation?.weak_citations,
+        missing_citations: citationValidation?.missing_citations,
+        citation_risk_level: citationValidation?.citation_risk_level,
+        official_source_fact_check: qaResult.officialSourceFactCheck,
+        final_legal_qa: qaResult.finalLegalQA,
+        pipeline_metadata: qaResult.metadata,
+        pipeline_warnings: qaResult.pipelineWarnings,
+        pipeline_errors: qaResult.pipelineErrors,
+        decision: decisionSummary,
+        ...(decisionRepositoryError ? { decision_repository_error: decisionRepositoryError } : {}),
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  } catch (error) {
+    console.error("Legal AI error:", error);
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : "Legal analysis failed" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+});

@@ -1,0 +1,18 @@
+-- =============================================================================
+-- live_schema_public.sql — PLACEHOLDER / REGENERATION POINTER
+-- =============================================================================
+-- This file was empty (0 bytes), which was itself a drift hazard. The
+-- authoritative, reproducible schema now lives in supabase/migrations/.
+--
+-- The dual-retrieval RPC + ANN index live state (the part that had drifted from
+-- the migrations) is captured in:
+--   supabase/migrations/20260627030000_baseline_live_dual_rpc_and_indexes.sql
+--
+-- To regenerate a FULL authoritative schema dump (requires Supabase CLI + DB access),
+-- run ONE of:
+--   supabase db dump --schema public,app,internal -f live_schema_public.sql
+--   pg_dump "$DATABASE_URL" --schema-only --schema=public --schema=app --schema=internal \
+--           --no-owner --no-privileges -f live_schema_public.sql
+--
+-- Do NOT commit data, secrets, or role passwords into this file. Schema only.
+-- =============================================================================

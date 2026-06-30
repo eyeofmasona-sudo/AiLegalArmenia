@@ -299,4 +299,226 @@ class MockQueryBuilder implements PromiseLike<LegalDecisionRepositoryResult<unkn
     return this;
   }
 
-  order(column: string,
+  order(column: string, options: { ascending?: boolean } = {}): MockQueryBuilder {
+    this.orderBy = { column, ascending: options.ascending ?? true };
+    return this;
+  }
+
+  limit(count: number): MockQueryBuilder {
+    this.limitCount = count;
+    return this;
+  }
+
+  insert(values: Record<string, unknown>): MockQueryBuilder {
+    this.operation = "insert";
+    this.insertValues = values;
+    return this;
+  }
+
+  update(values: Record<string, unknown>): MockQueryBuilder {
+    this.operation = "update";
+    this.updateValues = values;
+    return this;
+  }
+
+  async maybeSingle(): Promise<LegalDecisionRepositoryResult<LegalDecisionRow>> {
+    const result = await this.execute();
+    const rows = Array.isArray(result.data) ? result.data : result.data ? [result.data] : [];
+    return { data: (rows[0] as LegalDecisionRow | undefined) ?? null, error: result.error };
+  }
+
+  async single(): Promise<LegalDecisionRepositoryResult<LegalDecisionRow>> {
+    const result = await this.execute();
+    const rows = Array.isArray(result.data) ? result.data : result.data ? [result.data] : [];
+    return { data: rows[0] as LegalDecisionRow, error: result.error };
+  }
+
+  then<TResult1 = LegalDecisionRepositoryResult<unknown>, TResult2 = never>(
+    onfulfilled?: ((value: LegalDecisionRepositoryResult<unknown>) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): PromiseLike<TResult1 | TResult2> {
+    return this.execute().then(onfulfilled, onrejected);
+  }
+
+  private async execute(): Promise<LegalDecisionRepositoryResult<unknown>> {
+    if (this.client.failNext) {
+      const error = this.client.failNext;
+      this.client.failNext = null;
+      return { data: null, error };
+    }
+
+    if (this.operation === "insert") {
+      const duplicate = this.client.rows.find((row) =>
+        row.case_id === this.insertValues?.case_id &&
+        row.version_hash === this.insertValues?.version_hash
+      );
+      if (duplicate) return { data: null, error: { code: "23505", message: "duplicate" } };
+      const row = this.client.createRow(this.insertValues ?? {});
+      this.client.rows.push(row);
+      return { data: row, error: null };
+    }
+
+    let rows = this.filteredRows();
+    if (this.operation === "update") {
+      for (const row of rows) {
+        Object.assign(row, this.updateValues);
+      }
+      rows = this.filteredRows();
+    }
+
+    return { data: rows, error: null };
+  }
+
+  private filteredRows(): LegalDecisionRow[] {
+    let rows = this.client.rows.filter((row) =>
+      this.filters.every((filter) => (row as unknown as Record<string, unknown>)[filter.column] === filter.value)
+    );
+    if (this.orderBy) {
+      const { column, ascending } = this.orderBy;
+      rows = [...rows].sort((a, b) => {
+        const left = String((a as unknown as Record<string, unknown>)[column] ?? "");
+        const right = String((b as unknown as Record<string, unknown>)[column] ?? "");
+        return ascending ? left.localeCompare(right) : right.localeCompare(left);
+      });
+    }
+    if (this.limitCount !== null) rows = rows.slice(0, this.limitCount);
+    return rows;
+  }
+}
+
+// ── Phase 7.5B — Atomic supersession tests ────────────────────────────────────
+
+/** Helper: count rows with is_latest = true for a given case_id. */
+function countLatest(client: MockSupabaseClient, caseId: string): number {
+  return client.rows.filter((r) => r.case_id === caseId && r.is_latest === true).length;
+}
+
+Deno.test("atomic: at most one is_latest after three sequential saves", async () => {
+  const client = new MockSupabaseClient();
+  await saveLegalDecisionSnapshot(client, decision("hash-a"));
+  await saveLegalDecisionSnapshot(client, decision("hash-b"));
+  await saveLegalDecisionSnapshot(client, decision("hash-c"));
+
+  assertEquals(countLatest(client, CASE_ID), 1);
+  assertEquals(client.rows.find((r) => r.version_hash === "hash-c")?.is_latest, true);
+  assertEquals(client.rows.find((r) => r.version_hash === "hash-b")?.is_latest, false);
+  assertEquals(client.rows.find((r) => r.version_hash === "hash-a")?.is_latest, false);
+});
+
+Deno.test("atomic: five sequential saves — exactly one is_latest", async () => {
+  const client = new MockSupabaseClient();
+  const hashes = ["h1", "h2", "h3", "h4", "h5"];
+  for (const h of hashes) {
+    await saveLegalDecisionSnapshot(client, decision(h));
+  }
+
+  assertEquals(countLatest(client, CASE_ID), 1);
+  assertEquals(client.rows[client.rows.length - 1].is_latest, true);
+  assertEquals(client.rows.slice(0, -1).every((r) => !r.is_latest), true);
+});
+
+Deno.test("atomic: supersession chain — each version supersedes the previous", async () => {
+  const client = new MockSupabaseClient();
+  const a = await saveLegalDecisionSnapshot(client, decision("chain-a"));
+  const b = await saveLegalDecisionSnapshot(client, decision("chain-b"));
+  const c = await saveLegalDecisionSnapshot(client, decision("chain-c"));
+
+  assertEquals(a.data?.supersedes_decision_id, null);
+  assertEquals(b.data?.supersedes_decision_id, a.data?.id);
+  assertEquals(c.data?.supersedes_decision_id, b.data?.id);
+});
+
+Deno.test("atomic: rollback — insert failure restores previous is_latest", async () => {
+  const client = new MockSupabaseClient();
+  const first = await saveLegalDecisionSnapshot(client, decision("hash-a"));
+
+  assertEquals(first.inserted, true);
+  assertEquals(countLatest(client, CASE_ID), 1);
+
+  // Simulate INSERT failure inside the atomic function (Postgres rolls back UPDATE too)
+  client.failInsert = { message: "disk full" };
+  const second = await saveLegalDecisionSnapshot(client, decision("hash-b"));
+
+  // Insert failed → error returned
+  assertEquals(second.inserted, false);
+  assert(second.error);
+
+  // State rolled back: only hash-a remains, still is_latest=true
+  assertEquals(client.rows.length, 1);
+  assertEquals(countLatest(client, CASE_ID), 1);
+  assertEquals(client.rows[0].version_hash, "hash-a");
+  assertEquals(client.rows[0].is_latest, true);
+});
+
+Deno.test("atomic: rpc total failure keeps state clean", async () => {
+  const client = new MockSupabaseClient();
+  const first = await saveLegalDecisionSnapshot(client, decision("hash-a"));
+  assertEquals(first.inserted, true);
+
+  client.failNext = { message: "connection timeout" };
+  const second = await saveLegalDecisionSnapshot(client, decision("hash-b"));
+
+  assertEquals(second.inserted, false);
+  assert(second.error);
+  // No new row inserted, no state change
+  assertEquals(client.rows.length, 1);
+  assertEquals(countLatest(client, CASE_ID), 1);
+  assertEquals(client.rows[0].is_latest, true);
+});
+
+Deno.test("atomic: concurrent simulation — interleaved sequential saves maintain invariant", async () => {
+  // JS is single-threaded; simulate two concurrent callers by interleaving their
+  // steps using multiple MockSupabaseClient instances sharing a row store.
+  // The advisory lock in Postgres would serialize these; here we verify the
+  // result invariant holds after any sequential completion order.
+  const client = new MockSupabaseClient();
+
+  const results = await Promise.all([
+    saveLegalDecisionSnapshot(client, decision("concurrent-a")),
+    saveLegalDecisionSnapshot(client, decision("concurrent-b")),
+  ]);
+
+  // Both should complete without error
+  for (const r of results) {
+    assertEquals(r.error, null);
+  }
+
+  // Invariant: exactly one is_latest = true
+  assertEquals(countLatest(client, CASE_ID), 1);
+  // All rows present
+  assertEquals(client.rows.length, 2);
+});
+
+Deno.test("atomic: duplicate via rpc returns existing row without second insert", async () => {
+  const client = new MockSupabaseClient();
+  const first = await saveLegalDecisionSnapshot(client, decision("dup-hash"));
+  const second = await saveLegalDecisionSnapshot(client, decision("dup-hash"));
+
+  assertEquals(first.inserted, true);
+  assertEquals(second.inserted, false);
+  assertEquals(second.duplicate, true);
+  assertEquals(second.data?.id, first.data?.id);
+  assertEquals(client.rows.length, 1);
+  assertEquals(countLatest(client, CASE_ID), 1);
+});
+
+Deno.test("atomic: first save for case has no supersedes_decision_id", async () => {
+  const client = new MockSupabaseClient();
+  const result = await saveLegalDecisionSnapshot(client, decision("first"));
+
+  assertEquals(result.data?.supersedes_decision_id, null);
+  assertEquals(result.superseded_decision_id, null);
+});
+
+Deno.test("atomic: is_latest invariant survives mixed duplicate + new saves", async () => {
+  const client = new MockSupabaseClient();
+  await saveLegalDecisionSnapshot(client, decision("mx-a"));
+  await saveLegalDecisionSnapshot(client, decision("mx-a")); // duplicate
+  await saveLegalDecisionSnapshot(client, decision("mx-b"));
+  await saveLegalDecisionSnapshot(client, decision("mx-b")); // duplicate
+  await saveLegalDecisionSnapshot(client, decision("mx-c"));
+
+  assertEquals(countLatest(client, CASE_ID), 1);
+  assertEquals(client.rows.length, 3); // only 3 unique hashes
+  assertEquals(client.rows.find((r) => r.version_hash === "mx-c")?.is_latest, true);
+});

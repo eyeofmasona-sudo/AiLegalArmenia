@@ -1,20 +1,52 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
-import { sandboxUserInput, secureSandbox, logInjectionAttempt, sanitizeUserInput, ANTI_INJECTION_RULES } from "../_shared/prompt-armor.ts";
-import { applyBudgets, logTokenUsage, type RankedContent } from "../_shared/token-budget.ts";
+import {
+  ANTI_INJECTION_RULES,
+  logInjectionAttempt,
+  sandboxUserInput,
+  sanitizeUserInput,
+  secureSandbox,
+} from "../_shared/prompt-armor.ts";
+import {
+  applyBudgets,
+  logTokenUsage,
+  type RankedContent,
+} from "../_shared/token-budget.ts";
 // model-config import removed — all AI calls routed via gateway-bypass.ts → openai-router.ts
 import { redactForLog } from "../_shared/pii-redactor.ts";
-import { log, warn, err } from "../_shared/safe-logger.ts";
-import { searchKB, searchPractice, formatKBContext, formatPracticeContext as formatPracticeCtx, temporalDisclaimer } from "../_shared/rag-search.ts";
-import type { KBSearchResult, PracticeSearchResult } from "../_shared/rag-types.ts";
+import { err, log, warn } from "../_shared/safe-logger.ts";
+import {
+  formatKBContext,
+  formatPracticeContext as formatPracticeCtx,
+  searchKB,
+  searchPractice,
+  temporalDisclaimer,
+} from "../_shared/rag-search.ts";
+import type {
+  KBSearchResult,
+  PracticeSearchResult,
+} from "../_shared/rag-types.ts";
 import { handleCors } from "../_shared/edge-security.ts";
-import { parseReferencesText, buildUserSourcesBlock } from "../_shared/reference-sources.ts";
+import {
+  buildUserSourcesBlock,
+  parseReferencesText,
+} from "../_shared/reference-sources.ts";
 import { recordAiMetric } from "../_shared/ai-metrics.ts";
 import { verifyCitationsInText } from "../_shared/citation-verifier.ts";
 import { buildLegalCorePrompt } from "../_shared/legal-core-prompt.ts";
-import { buildLegalReasoningContext, buildReasoningSearchQuery, runLegalReasoningEngine } from "../_shared/legal-reasoning-engine.ts";
-import { buildSourceHierarchyContext, type LegalSourceLike } from "../_shared/source-hierarchy-engine.ts";
-import { buildCourtPracticeContext, type PracticeSourceLike } from "../_shared/court-practice-engine.ts";
+import {
+  buildLegalReasoningContext,
+  buildReasoningSearchQuery,
+  runLegalReasoningEngine,
+} from "../_shared/legal-reasoning-engine.ts";
+import {
+  buildSourceHierarchyContext,
+  type LegalSourceLike,
+} from "../_shared/source-hierarchy-engine.ts";
+import {
+  buildCourtPracticeContext,
+  type PracticeSourceLike,
+} from "../_shared/court-practice-engine.ts";
 import { buildTemporalContextForPrompt } from "../_shared/temporal-validity-engine.ts";
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
 
@@ -22,7 +54,8 @@ import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-
 type LegalPracticeResult = PracticeSearchResult;
 
 // Legal AI System Prompt - production grade
-const LEGAL_AI_SYSTEM_PROMPT = `You are "Ai Legal Armenia" \u2014 a Legal Assistant Agent operating within a modular Legal AI system.
+const LEGAL_AI_SYSTEM_PROMPT =
+  `You are "Ai Legal Armenia" \u2014 a Legal Assistant Agent operating within a modular Legal AI system.
 
 You operate STRICTLY within the law of the Republic of Armenia (RA) and RA-relevant court practice.
 
@@ -210,13 +243,42 @@ USER_MESSAGE: {USER_MESSAGE}
 ${ANTI_INJECTION_RULES}`;
 
 // Greeting message for new conversations
-const GREETING_MESSAGE = `\u0532\u0561\u0580\u0587 \u0541\u0565\u0566\u0589 \u0535\u057D Ai Legal Armenia-\u056B \u056B\u0580\u0561\u057E\u0561\u056F\u0561\u0576 \u0585\u0563\u0576\u0561\u056F\u0561\u0576\u0576 \u0565\u0574\u0589 
+const GREETING_MESSAGE =
+  `\u0532\u0561\u0580\u0587 \u0541\u0565\u0566\u0589 \u0535\u057D Ai Legal Armenia-\u056B \u056B\u0580\u0561\u057E\u0561\u056F\u0561\u0576 \u0585\u0563\u0576\u0561\u056F\u0561\u0576\u0576 \u0565\u0574\u0589 
 \u053F\u0561\u0580\u0578\u0572 \u0565\u0574 \u057A\u0561\u057F\u0561\u057D\u056D\u0561\u0576\u0565\u056C \u0574\u056B\u0561\u0575\u0576 \u0540\u0540 \u056B\u0580\u0561\u057E\u0578\u0582\u0576\u0584\u056B\u0576 \u057E\u0565\u0580\u0561\u0562\u0565\u0580\u0578\u0572 \u0570\u0561\u0580\u0581\u0565\u0580\u056B\u0576 \u0587 \u0570\u0561\u0580\u0581\u0565\u0580\u056B\u0576 Ai Legal Armenia \u056E\u0580\u0561\u0563\u0580\u056B \u0574\u0561\u057D\u056B\u0576\u055D 
 \u0570\u056B\u0574\u0576\u057E\u0565\u056C\u0578\u057E \u0562\u0561\u0581\u0561\u057C\u0561\u057A\u0565\u057D \u0563\u056B\u057F\u0565\u056C\u056B\u0584\u0576\u0565\u0580\u056B \u0562\u0561\u0566\u0561\u0575\u056B \u057E\u0580\u0561\u0589
 
 \u053B\u0576\u0579\u057A\u0565\u055E\u057D \u056F\u0561\u0580\u0578\u0572 \u0565\u0574 \u0585\u0563\u0576\u0565\u056C \u0541\u0565\u0566\u0589`;
 
 const FN = "legal-chat";
+const SAFE_BLOCKED_MESSAGE_HY =
+  "Վերլուծությունը չի կարող ցուցադրվել, քանի որ վերջնական իրավական որակի ստուգումը հայտնաբերել է բարձր ռիսկային խնդիրներ։ Խնդրում ենք դիմել իրավաբանի կամ կրկնել հարցումը՝ լրացուցիչ փաստերով։";
+const HEARTBEAT_INTERVAL_MS = 5000;
+type LegalChatStreamMode = "safe" | "legacy";
+
+function resolveStreamMode(value: unknown): LegalChatStreamMode {
+  if (value === "safe" || value === "legacy") return value;
+  const envMode = Deno.env.get("LEGAL_CHAT_STREAM_MODE");
+  return envMode === "safe" ? "safe" : "legacy";
+}
+
+function sseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function shouldBlockChatOutput(
+  finalLegalQA:
+    | {
+      final_legal_qa_status?: string | null;
+      safe_to_show_user?: boolean | null;
+    }
+    | null
+    | undefined,
+): boolean {
+  if (!finalLegalQA) return false;
+  if (finalLegalQA.safe_to_show_user === false) return true;
+  return finalLegalQA.final_legal_qa_status === "FAIL";
+}
 
 serve(async (req) => {
   const cors = handleCors(req);
@@ -236,7 +298,7 @@ serve(async (req) => {
     const sb = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
+      { global: { headers: { Authorization: authHeader } } },
     );
     const { data: { user }, error: authError } = await sb.auth.getUser(token);
     if (authError || !user) {
@@ -249,12 +311,18 @@ serve(async (req) => {
 
     const reqBody = await req.json();
     const { message, conversationHistory, caseDate } = reqBody;
-    const referencesText: string = typeof reqBody.referencesText === "string" ? reqBody.referencesText : "";
+    const referencesText: string = typeof reqBody.referencesText === "string"
+      ? reqBody.referencesText
+      : "";
+    const streamMode = resolveStreamMode(reqBody.streamMode);
 
     if (!message || typeof message !== "string") {
       return new Response(
         JSON.stringify({ error: "Message is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -263,7 +331,10 @@ serve(async (req) => {
     if (message.length > MAX_MESSAGE_LENGTH) {
       return new Response(
         JSON.stringify({ error: "Message too long" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -276,8 +347,17 @@ serve(async (req) => {
     const rateCheck = await checkRateLimits(supabase, user.id, "legal-chat");
     if (!rateCheck.allowed) {
       return new Response(
-        JSON.stringify({ error: rateCheck.reason, message: rateCheck.message, retry_after_seconds: rateCheck.reason === "hourly_limit_exceeded" ? 3600 : undefined }),
-        { status: rateCheck.status || 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: rateCheck.reason,
+          message: rateCheck.message,
+          retry_after_seconds: rateCheck.reason === "hourly_limit_exceeded"
+            ? 3600
+            : undefined,
+        }),
+        {
+          status: rateCheck.status || 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
     // === END RATE LIMITING ===
@@ -288,7 +368,8 @@ serve(async (req) => {
     log(FN, "Chat request", { userId, messageLen: message.length });
 
     // Search knowledge base + legal practice (RAG) — via shared module
-    const referenceDate: string | null = (caseDate && typeof caseDate === "string") ? caseDate : null;
+    const referenceDate: string | null =
+      (caseDate && typeof caseDate === "string") ? caseDate : null;
     const dateAssumed = !referenceDate;
     const strictTemporal = !!(reqBody.strict_temporal);
 
@@ -312,19 +393,27 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({
             error: "strict_temporal_violation",
-            message: "strict_temporal enabled but reference_date could not be resolved.",
+            message:
+              "strict_temporal enabled but reference_date could not be resolved.",
             temporal_warning: temporalWarning,
           }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
         );
       }
     }
     const caseText = conversationHistory && Array.isArray(conversationHistory)
-      ? conversationHistory.slice(-6).map((m: { content?: string }) => m?.content || "").join("\n")
+      ? conversationHistory.slice(-6).map((m: { content?: string }) =>
+        m?.content || ""
+      ).join("\n")
       : "";
 
     // Import orchestrator
-    const { runLegalPipeline } = await import("../_shared/legal-pipeline-orchestrator.ts");
+    const { runLegalPipeline } = await import(
+      "../_shared/legal-pipeline-orchestrator.ts"
+    );
 
     let kbContext = "";
     let practiceContext = "";
@@ -332,11 +421,20 @@ serve(async (req) => {
 
     const deps: any = {
       runRAG: async (query: any, opts: any) => {
-        const ragResult: any = { kbResults: [], practiceResults: [], semantic_ok: true };
+        const ragResult: any = {
+          kbResults: [],
+          practiceResults: [],
+          semantic_ok: true,
+        };
         try {
           const kbResult = await searchKB({
-            supabase, supabaseUrl, supabaseKey: supabaseServiceKey,
-            query, referenceDate: opts.referenceDate, limit: 8, snippetLength: 4000,
+            supabase,
+            supabaseUrl,
+            supabaseKey: supabaseServiceKey,
+            query,
+            referenceDate: opts.referenceDate,
+            limit: 8,
+            snippetLength: 4000,
           });
           if (kbResult.results.length > 0) {
             log(FN, "KB context ready", { docs: kbResult.results.length });
@@ -353,11 +451,16 @@ serve(async (req) => {
 
         try {
           const practiceResult = await searchPractice({
-            supabase, supabaseUrl, supabaseKey: supabaseServiceKey,
-            query, limit: 5,
+            supabase,
+            supabaseUrl,
+            supabaseKey: supabaseServiceKey,
+            query,
+            limit: 5,
           });
           if (practiceResult.results.length > 0) {
-            log(FN, "Practice results", { count: practiceResult.results.length });
+            log(FN, "Practice results", {
+              count: practiceResult.results.length,
+            });
             ragResult.practiceResults = practiceResult.results;
             practiceContext = formatPracticeCtx(practiceResult.results, true);
           } else {
@@ -369,7 +472,7 @@ serve(async (req) => {
         }
         cachedRagResult = ragResult;
         return ragResult;
-      }
+      },
     };
 
     const pipelineResult = await runLegalPipeline({
@@ -382,12 +485,14 @@ serve(async (req) => {
     }, deps);
 
     const legalReasoning = pipelineResult.reasoning!;
-    
+
     // ====== TOKEN BUDGET LIMITER ======
     const budgeted = applyBudgets({
       userFacts: message,
       ragLegislation: kbContext ? [{ text: kbContext, score: 10 }] : [],
-      ragPractice: practiceContext ? [{ text: practiceContext, score: 10 }] : [],
+      ragPractice: practiceContext
+        ? [{ text: practiceContext, score: 10 }]
+        : [],
     }, "chat");
     logTokenUsage("legal-chat", userId, budgeted.usage);
 
@@ -404,33 +509,44 @@ serve(async (req) => {
       const capped = refs.slice(0, 10);
       userSourcesBlock = buildUserSourcesBlock(capped);
       if (refs.length > 10) {
-        userSourcesBlock += "\nNOTE: Only first 10 of " + refs.length + " user-selected sources included due to token budget.\n";
+        userSourcesBlock += "\nNOTE: Only first 10 of " + refs.length +
+          " user-selected sources included due to token budget.\n";
       }
-      log(FN, "User sources parsed", { count: capped.length, total: refs.length });
+      log(FN, "User sources parsed", {
+        count: capped.length,
+        total: refs.length,
+      });
     }
 
-    const safeLegislation = budgeted.ragLegislation 
-      ? secureSandbox("RAG_LEGISLATION", budgeted.ragLegislation, "legal-chat").output
+    const safeLegislation = budgeted.ragLegislation
+      ? secureSandbox("RAG_LEGISLATION", budgeted.ragLegislation, "legal-chat")
+        .output
       : "\u0533\u056B\u057F\u0565\u056C\u056B\u0584\u0576\u0565\u0580\u056B \u0562\u0561\u0566\u0561\u0575\u0578\u0582\u0574 \u0570\u0561\u0574\u0561\u057A\u0561\u057F\u0561\u057D\u056D\u0561\u0576 \u057F\u0565\u0572\u0565\u056F\u0561\u057F\u057E\u0578\u0582\u0569\u0575\u0578\u0582\u0576 \u0579\u056B \u0563\u057F\u0576\u057E\u0565\u056C\u0589";
-      
+
     const safePractice = budgeted.ragPractice
       ? secureSandbox("RAG_PRACTICE", budgeted.ragPractice, "legal-chat").output
       : "\u0534\u0561\u057F\u0561\u056F\u0561\u0576 \u057A\u0580\u0561\u056F\u057F\u056B\u056F\u0561\u0575\u056B \u0570\u0561\u0574\u0561\u057A\u0561\u057F\u0561\u057D\u056D\u0561\u0576 \u0578\u0580\u0578\u0577\u0578\u0582\u0574\u0576\u0565\u0580 \u0579\u0565\u0576 \u0563\u057F\u0576\u057E\u0565\u056C\u0589";
 
-    let systemPromptWithContext = pipelineResult.legalCorePrompt + "\n\n" + LEGAL_AI_SYSTEM_PROMPT
-      .replace("{CONTEXT}", safeLegislation)
-      .replace("{PRACTICE_CONTEXT}", safePractice)
-      .replace("{USER_MESSAGE}", secureSandbox("USER_MESSAGE", messageScan.sanitizedText, "legal-chat").output);
+    let systemPromptWithContext = pipelineResult.legalCorePrompt + "\n\n" +
+      LEGAL_AI_SYSTEM_PROMPT
+        .replace("{CONTEXT}", safeLegislation)
+        .replace("{PRACTICE_CONTEXT}", safePractice)
+        .replace(
+          "{USER_MESSAGE}",
+          secureSandbox("USER_MESSAGE", messageScan.sanitizedText, "legal-chat")
+            .output,
+        );
 
     if (userSourcesBlock) {
-      const safeUserSources = secureSandbox("USER_SOURCES", userSourcesBlock, "legal-chat").output;
+      const safeUserSources =
+        secureSandbox("USER_SOURCES", userSourcesBlock, "legal-chat").output;
       systemPromptWithContext += "\n\n" + safeUserSources +
         "\nWhen user-selected sources are provided above, you MUST cite them by docId and chunkIndex. Do NOT fetch additional data for these sources; use only the provided snippets.\n";
     }
 
     // Build messages array with conversation history
     const messages: Array<{ role: string; content: string }> = [
-      { role: "system", content: systemPromptWithContext }
+      { role: "system", content: systemPromptWithContext },
     ];
 
     // FIX B: Add conversation history with caps to prevent token abuse
@@ -463,7 +579,9 @@ serve(async (req) => {
 
     // NOTE: legal-chat uses streaming — bypass via centralized helper.
     const { callStreamBypass } = await import("../_shared/gateway-bypass.ts");
-    const { getModelConfig: _getModelConfig } = await import("../_shared/openai-router.ts");
+    const { getModelConfig: _getModelConfig } = await import(
+      "../_shared/openai-router.ts"
+    );
     const chatModelCfg = _getModelConfig("legal-chat");
 
     const streamResult = await callStreamBypass(messages, {
@@ -478,26 +596,48 @@ serve(async (req) => {
 
       if (response.status === 429) {
         return new Response(
-          JSON.stringify({ error: "\u0540\u0561\u0580\u0581\u0578\u0582\u0574\u0576\u0565\u0580\u056B \u057D\u0561\u0570\u0574\u0561\u0576\u0568 \u0563\u0565\u0580\u0561\u0566\u0561\u0576\u0581\u057E\u0565\u0581\u0589 \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0583\u0578\u0580\u0571\u0565\u056C \u0561\u057E\u0565\u056C\u056B \u0578\u0582\u0577\u0589" }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({
+            error:
+              "\u0540\u0561\u0580\u0581\u0578\u0582\u0574\u0576\u0565\u0580\u056B \u057D\u0561\u0570\u0574\u0561\u0576\u0568 \u0563\u0565\u0580\u0561\u0566\u0561\u0576\u0581\u057E\u0565\u0581\u0589 \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0583\u0578\u0580\u0571\u0565\u056C \u0561\u057E\u0565\u056C\u056B \u0578\u0582\u0577\u0589",
+          }),
+          {
+            status: 429,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
         );
       }
       if (response.status === 402) {
         return new Response(
-          JSON.stringify({ error: "\u0540\u0561\u0577\u057E\u056B \u0574\u056B\u057B\u0578\u0581\u0576\u0565\u0580\u0568 \u057D\u057A\u0561\u057C\u057E\u0565\u056C \u0565\u0576\u0589" }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({
+            error:
+              "\u0540\u0561\u0577\u057E\u056B \u0574\u056B\u057B\u0578\u0581\u0576\u0565\u0580\u0568 \u057D\u057A\u0561\u057C\u057E\u0565\u056C \u0565\u0576\u0589",
+          }),
+          {
+            status: 402,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
         );
       }
 
       return new Response(
-        JSON.stringify({ error: "\u054D\u056D\u0561\u056C \u0561\u057C\u0561\u057B\u0561\u0581\u0561\u057E\u0589 \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0576\u0578\u0580\u056B\u0581\u0589" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error:
+            "\u054D\u056D\u0561\u056C \u0561\u057C\u0561\u057B\u0561\u0581\u0561\u057E\u0589 \u053D\u0576\u0564\u0580\u0578\u0582\u0574 \u0565\u0576\u0584 \u0576\u0578\u0580\u056B\u0581\u0589",
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
     // Bounded streaming cost accounting: count actual streamed chars
     const estimatedInputTokens = Math.ceil(
-      messages.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0) / 4
+      messages.reduce(
+        (sum, m) =>
+          sum + (typeof m.content === "string" ? m.content.length : 0),
+        0,
+      ) / 4,
     );
     const OUTPUT_TOKEN_CAP = chatModelCfg.max_tokens; // from MODEL_MAP
     let streamedCharsTotal = 0;
@@ -506,8 +646,31 @@ serve(async (req) => {
     let sawDone = false;
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
+    let heartbeatId: ReturnType<typeof setInterval> | undefined;
+    let heartbeatStage = "generating_draft";
 
     const { readable, writable } = new TransformStream({
+      start(controller) {
+        if (streamMode === "safe") {
+          controller.enqueue(encoder.encode(sseEvent("reasoning_started", {
+            streaming_safety_mode: "safe_verified_final_text",
+          })));
+          controller.enqueue(encoder.encode(sseEvent("retrieval_complete", {
+            streaming_safety_mode: "safe_verified_final_text",
+            rag_cached: Boolean(cachedRagResult),
+          })));
+          controller.enqueue(encoder.encode(sseEvent("generating_draft", {
+            streaming_safety_mode: "safe_verified_final_text",
+          })));
+          heartbeatId = setInterval(() => {
+            controller.enqueue(encoder.encode(sseEvent("progress", {
+              stage: heartbeatStage,
+              streaming_safety_mode: "safe_verified_final_text",
+              heartbeat: true,
+            })));
+          }, HEARTBEAT_INTERVAL_MS);
+        }
+      },
       transform(chunk, controller) {
         // Count text content from SSE data lines and delay [DONE] until validation.
         try {
@@ -520,7 +683,9 @@ serve(async (req) => {
               sawDone = true;
               continue;
             }
-            controller.enqueue(encoder.encode(line + "\n"));
+            if (streamMode === "legacy") {
+              controller.enqueue(encoder.encode(line + "\n"));
+            }
             if (!line.startsWith("data: ")) continue;
             try {
               const parsed = JSON.parse(line.slice(6));
@@ -532,7 +697,9 @@ serve(async (req) => {
             } catch { /* non-JSON SSE line, skip */ }
           }
         } catch {
-          controller.enqueue(chunk);
+          if (streamMode === "legacy") {
+            controller.enqueue(chunk);
+          }
         }
       },
       async flush(controller) {
@@ -540,7 +707,9 @@ serve(async (req) => {
           if (sseBuffer.trim() === "data: [DONE]") {
             sawDone = true;
           } else {
-            controller.enqueue(encoder.encode(sseBuffer));
+            if (streamMode === "legacy") {
+              controller.enqueue(encoder.encode(sseBuffer));
+            }
           }
         }
         // Log usage after stream completes with actual output estimate
@@ -555,10 +724,28 @@ serve(async (req) => {
           totalTokens: totalTokensEst,
           status: "success",
           userId,
-        }).catch((logErr: unknown) => err(FN, "Failed to log AI metric", logErr));
+        }).catch((logErr: unknown) =>
+          err(FN, "Failed to log AI metric", logErr)
+        );
 
         try {
-          const { runFinalLegalQA } = await import("../_shared/final-legal-qa-agent.ts");
+          const { runFinalLegalQA } = await import(
+            "../_shared/final-legal-qa-agent.ts"
+          );
+          if (streamMode === "safe") {
+            heartbeatStage = "verifying_citations";
+            controller.enqueue(encoder.encode(sseEvent("verifying_citations", {
+              streaming_safety_mode: "safe_verified_final_text",
+            })));
+            heartbeatStage = "official_fact_check";
+            controller.enqueue(encoder.encode(sseEvent("official_fact_check", {
+              streaming_safety_mode: "safe_verified_final_text",
+            })));
+            heartbeatStage = "final_qa";
+            controller.enqueue(encoder.encode(sseEvent("final_qa", {
+              streaming_safety_mode: "safe_verified_final_text",
+            })));
+          }
           const qaResult = await runLegalPipeline({
             mode: "chat",
             userQuery: message,
@@ -569,7 +756,8 @@ serve(async (req) => {
             generatedText: streamedText,
           }, {
             runRAG: async () =>
-              cachedRagResult ?? { kbResults: [], practiceResults: [], semantic_ok: false },
+              cachedRagResult ??
+                { kbResults: [], practiceResults: [], semantic_ok: false },
             verifyCitations: (text: string, opts: unknown) =>
               verifyCitationsInText(text, supabase, {
                 ...(opts as Record<string, unknown>),
@@ -578,7 +766,11 @@ serve(async (req) => {
                 mode: "markers",
                 referenceDate,
               }),
-            runOfficialFactCheck: (text: string, citations: string[], meta: Record<string, unknown>) =>
+            runOfficialFactCheck: (
+              text: string,
+              citations: string[],
+              meta: Record<string, unknown>,
+            ) =>
               runOfficialSourceFactCheckStub({
                 analysisText: text,
                 citations,
@@ -587,7 +779,110 @@ serve(async (req) => {
             runFinalLegalQA,
           });
           const citationVerification = qaResult.citationVerification;
-          controller.enqueue(encoder.encode(`event: legal_reasoning\ndata: ${JSON.stringify(legalReasoning)}\n\n`));
-          controller.enqueue(encoder.encode(`event: pipeline_metadata\ndata: ${JSON.stringify(qaResult.metadata)}\n\n`));
-          controller.enqueue(encoder.encode(`event: citation_validation\ndata: ${JSON.stringify(citationVerification)}\n\n`));
-          controller.enqueue(encoder.encode(`event: citation_verification
+          const streamingSafetyMode = streamMode === "safe"
+            ? "safe_verified_final_text"
+            : "legacy_unverified_streaming";
+          const pipelineMetadata = {
+            ...qaResult.metadata,
+            streaming_safety_mode: streamingSafetyMode,
+          };
+
+          if (streamMode === "safe") {
+            if (shouldBlockChatOutput(qaResult.finalLegalQA)) {
+              controller.enqueue(encoder.encode(sseEvent("blocked", {
+                message: SAFE_BLOCKED_MESSAGE_HY,
+                streaming_safety_mode: streamingSafetyMode,
+                final_legal_qa_status:
+                  qaResult.finalLegalQA?.final_legal_qa_status ?? null,
+              })));
+            } else {
+              controller.enqueue(encoder.encode(sseEvent("final_text", {
+                text: streamedText,
+                streaming_safety_mode: streamingSafetyMode,
+              })));
+              controller.enqueue(encoder.encode(sseEvent("completed", {
+                streaming_safety_mode: streamingSafetyMode,
+              })));
+            }
+          }
+
+          controller.enqueue(
+            encoder.encode(sseEvent("legal_reasoning", legalReasoning)),
+          );
+          controller.enqueue(
+            encoder.encode(sseEvent("pipeline_metadata", pipelineMetadata)),
+          );
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("citation_validation", citationVerification),
+            ),
+          );
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("citation_verification", citationVerification),
+            ),
+          );
+          controller.enqueue(
+            encoder.encode(
+              sseEvent(
+                "official_source_fact_check",
+                qaResult.officialSourceFactCheck,
+              ),
+            ),
+          );
+          controller.enqueue(
+            encoder.encode(sseEvent("final_legal_qa", qaResult.finalLegalQA)),
+          );
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("pipeline_warnings", qaResult.pipelineWarnings),
+            ),
+          );
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("pipeline_errors", qaResult.pipelineErrors),
+            ),
+          );
+        } catch (validationErr) {
+          err(FN, "Citation validation failed", validationErr);
+          if (streamMode === "safe") {
+            controller.enqueue(encoder.encode(sseEvent("blocked", {
+              message: SAFE_BLOCKED_MESSAGE_HY,
+              streaming_safety_mode: "safe_verified_final_text",
+              reason: "qa_chain_failed",
+            })));
+          }
+        }
+
+        if (heartbeatId) {
+          clearInterval(heartbeatId);
+          heartbeatId = undefined;
+        }
+        if (streamMode === "safe" || sawDone) {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
+      },
+    });
+
+    // Pipe the AI response through our counting transform
+    response.body!.pipeTo(writable).catch(() => {});
+
+    // Return the transformed stream
+    return new Response(readable, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  } catch (error) {
+    err(FN, "Unhandled error", error);
+    return new Response(
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+});
+
+// sanitizeForPostgrest moved to _shared/rag-search.ts

@@ -11,16 +11,19 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import {
-  runLegalPipeline,
   type LegalPipelineDeps,
   type LegalPipelineInput,
+  runLegalPipeline,
 } from "../_shared/legal-pipeline-orchestrator.ts";
 import { runFinalLegalQA } from "../_shared/final-legal-qa-agent.ts";
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
 
-const GENERATED_TEXT = "Legal chat answer with [ID: 11111111-1111-4111-8111-111111111111].";
+const GENERATED_TEXT =
+  "Legal chat answer with [ID: 11111111-1111-4111-8111-111111111111].";
 
-const baseInput = (overrides: Partial<LegalPipelineInput> = {}): LegalPipelineInput => ({
+const baseInput = (
+  overrides: Partial<LegalPipelineInput> = {},
+): LegalPipelineInput => ({
   mode: "chat",
   userQuery: "Explain a civil law issue",
   caseText: "Recent conversation context",
@@ -56,7 +59,11 @@ const fullQaDeps = (cachedRagResult: unknown): LegalPipelineDeps => ({
 Deno.test("legal-chat QA - uses Orchestrator v2 metadata", async () => {
   const result = await runLegalPipeline(
     baseInput({ generatedText: GENERATED_TEXT }),
-    fullQaDeps({ kbResults: [{ id: "kb-1" }], practiceResults: [], semantic_ok: true }),
+    fullQaDeps({
+      kbResults: [{ id: "kb-1" }],
+      practiceResults: [],
+      semantic_ok: true,
+    }),
   );
 
   assert(result.citationVerification !== null);
@@ -69,7 +76,11 @@ Deno.test("legal-chat QA - uses Orchestrator v2 metadata", async () => {
 
 Deno.test("legal-chat QA - second pipeline uses cachedRagResult only", async () => {
   let ragCalls = 0;
-  const cachedRagResult = { kbResults: [{ id: "cached-kb" }], practiceResults: [], semantic_ok: true };
+  const cachedRagResult = {
+    kbResults: [{ id: "cached-kb" }],
+    practiceResults: [],
+    semantic_ok: true,
+  };
   const deps = fullQaDeps(cachedRagResult);
   deps.runRAG = async () => {
     ragCalls += 1;
@@ -101,23 +112,41 @@ Deno.test("legal-chat QA - QA stages run after generated text exists", async () 
     "final_legal_qa",
     "verification",
   ]);
-  assertEquals(result.stages.find((s) => s.name === "citation_verification")?.status, "pass");
-  assertEquals(result.stages.find((s) => s.name === "official_source_fact_check")?.status, "pass");
-  assertEquals(result.stages.find((s) => s.name === "final_legal_qa")?.status, "pass");
+  assertEquals(
+    result.stages.find((s) => s.name === "citation_verification")?.status,
+    "pass",
+  );
+  assertEquals(
+    result.stages.find((s) => s.name === "official_source_fact_check")?.status,
+    "pass",
+  );
+  assertEquals(
+    result.stages.find((s) => s.name === "final_legal_qa")?.status,
+    "pass",
+  );
 });
 
 Deno.test("legal-chat QA - streaming call remains callStreamBypass", async () => {
-  const source = await Deno.readTextFile("supabase/functions/legal-chat/index.ts");
+  const source = await Deno.readTextFile(
+    "supabase/functions/legal-chat/index.ts",
+  );
 
   assertStringIncludes(source, "callStreamBypass");
-  assertStringIncludes(source, "bypassReason: \"streaming\"");
-  assertStringIncludes(source, "const { readable, writable } = new TransformStream");
+  assertStringIncludes(source, 'bypassReason: "streaming"');
+  assertStringIncludes(
+    source,
+    "const { readable, writable } = new TransformStream",
+  );
   assertStringIncludes(source, "response.body!.pipeTo(writable)");
 });
 
 Deno.test("legal-chat QA - post-stream QA uses cachedRagResult without search calls", async () => {
-  const source = await Deno.readTextFile("supabase/functions/legal-chat/index.ts");
-  const qaBlock = source.match(/const qaResult = await runLegalPipeline[\s\S]*?const citationVerification/)?.[0] ?? "";
+  const source = await Deno.readTextFile(
+    "supabase/functions/legal-chat/index.ts",
+  );
+  const qaBlock = source.match(
+    /const qaResult = await runLegalPipeline[\s\S]*?const citationVerification/,
+  )?.[0] ?? "";
 
   assertStringIncludes(qaBlock, "generatedText: streamedText");
   assertStringIncludes(qaBlock, "cachedRagResult ??");
@@ -129,7 +158,9 @@ Deno.test("legal-chat QA - post-stream QA uses cachedRagResult without search ca
 });
 
 Deno.test("legal-chat QA - citation verification remains post-generation", async () => {
-  const source = await Deno.readTextFile("supabase/functions/legal-chat/index.ts");
+  const source = await Deno.readTextFile(
+    "supabase/functions/legal-chat/index.ts",
+  );
   const streamedTextIndex = source.indexOf("streamedText += delta");
   const qaIndex = source.indexOf("const qaResult = await runLegalPipeline");
   const doneIndex = source.indexOf("data: [DONE]", qaIndex);
@@ -140,14 +171,18 @@ Deno.test("legal-chat QA - citation verification remains post-generation", async
 });
 
 Deno.test("legal-chat QA - SSE metadata preserves backward compatibility", async () => {
-  const source = await Deno.readTextFile("supabase/functions/legal-chat/index.ts");
+  const source = await Deno.readTextFile(
+    "supabase/functions/legal-chat/index.ts",
+  );
 
-  assertStringIncludes(source, "event: legal_reasoning");
-  assertStringIncludes(source, "event: pipeline_metadata");
-  assertStringIncludes(source, "event: citation_validation");
-  assertStringIncludes(source, "event: citation_verification");
-  assertStringIncludes(source, "event: official_source_fact_check");
-  assertStringIncludes(source, "event: final_legal_qa");
-  assertStringIncludes(source, "event: pipeline_warnings");
-  assertStringIncludes(source, "event: pipeline_errors");
+  const hasEvent = (eventName: string) =>
+    new RegExp(`sseEvent\\(\\s*"${eventName}"`).test(source);
+  assert(hasEvent("legal_reasoning"));
+  assert(hasEvent("pipeline_metadata"));
+  assert(hasEvent("citation_validation"));
+  assert(hasEvent("citation_verification"));
+  assert(hasEvent("official_source_fact_check"));
+  assert(hasEvent("final_legal_qa"));
+  assert(hasEvent("pipeline_warnings"));
+  assert(hasEvent("pipeline_errors"));
 });

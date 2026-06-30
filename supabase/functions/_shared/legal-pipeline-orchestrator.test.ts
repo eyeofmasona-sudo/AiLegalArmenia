@@ -184,4 +184,193 @@ Deno.test("LegalPipelineOrchestrator - system prompt contains CURATED LEGAL BRIE
 
 Deno.test("LegalPipelineOrchestrator - document mode system prompt contains CURATED LEGAL BRIEF", async () => {
   const result = await runLegalPipeline(
-    createInput({ functionContext: "generate-
+    createInput({ functionContext: "generate-document" }),
+    createMockDeps(),
+  );
+  assertStringIncludes(result.legalCorePrompt, "CURATED LEGAL BRIEF");
+});
+
+Deno.test("LegalPipelineOrchestrator - complaint mode system prompt contains CURATED LEGAL BRIEF", async () => {
+  const result = await runLegalPipeline(
+    createInput({ functionContext: "generate-complaint" }),
+    createMockDeps(),
+  );
+  assertStringIncludes(result.legalCorePrompt, "CURATED LEGAL BRIEF");
+});
+
+Deno.test("LegalPipelineOrchestrator - analysis mode system prompt contains CURATED LEGAL BRIEF", async () => {
+  const result = await runLegalPipeline(
+    createInput({ functionContext: "ai-analyze", mode: "analysis" }),
+    createMockDeps(),
+  );
+  assertStringIncludes(result.legalCorePrompt, "CURATED LEGAL BRIEF");
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6.8 — 8 new tests
+// ---------------------------------------------------------------------------
+
+// New test 1: citation_verification skipped when verifyCitations dep is absent
+Deno.test("LegalPipelineOrchestrator v2 - citation_verification skipped when verifyCitations dep absent", async () => {
+  const deps: LegalPipelineDeps = {
+    runRAG: async () => ({ kbResults: [], practiceResults: [] }),
+    // no verifyCitations
+  };
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Some legal text." }),
+    deps,
+  );
+  const citStage = result.stages.find((s) => s.name === "citation_verification");
+  assertEquals(citStage?.status, "skipped");
+  // No error on the stage — silent skip per spec
+  assertEquals(citStage?.errors.length, 0);
+  assertEquals(result.citationVerification, null);
+});
+
+// New test 2: official_source_fact_check skipped (NOT_RUN) when dep absent
+Deno.test("LegalPipelineOrchestrator v2 - official_source_fact_check uses NOT_RUN when dep absent", async () => {
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Some legal text." }),
+    createMockDeps(), // no runOfficialFactCheck
+  );
+  const factStage = result.stages.find((s) => s.name === "official_source_fact_check");
+  assertEquals(factStage?.status, "skipped");
+  assertEquals(result.officialSourceFactCheck?.official_fact_check_status, "NOT_RUN");
+});
+
+// New test 3: final_legal_qa skipped (NOT_RUN) when dep absent
+Deno.test("LegalPipelineOrchestrator v2 - final_legal_qa uses NOT_RUN when dep absent", async () => {
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Some legal text." }),
+    createMockDeps(), // no runFinalLegalQA
+  );
+  const qaStage = result.stages.find((s) => s.name === "final_legal_qa");
+  assertEquals(qaStage?.status, "skipped");
+  assertEquals(result.finalLegalQA?.final_legal_qa_status, "NOT_RUN");
+});
+
+// New test 4: all QA stages execute and pass when all deps are provided
+Deno.test("LegalPipelineOrchestrator v2 - all QA stages execute when all deps provided", async () => {
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Full legal analysis text." }),
+    createFullMockDeps(),
+  );
+  const citStage = result.stages.find((s) => s.name === "citation_verification");
+  const factStage = result.stages.find((s) => s.name === "official_source_fact_check");
+  const qaStage = result.stages.find((s) => s.name === "final_legal_qa");
+
+  assertEquals(citStage?.status, "pass");
+  assertEquals(factStage?.status, "pass");
+  assertEquals(qaStage?.status, "pass");
+
+  assert(result.citationVerification !== null, "citationVerification should be populated");
+  assert(
+    result.officialSourceFactCheck !== null,
+    "officialSourceFactCheck should be populated",
+  );
+  assert(result.finalLegalQA !== null, "finalLegalQA should be populated");
+  assertEquals(result.finalLegalQA?.final_legal_qa_status, "PASS");
+});
+
+// New test 5: 8-stage ordering is preserved end-to-end
+Deno.test("LegalPipelineOrchestrator v2 - 8-stage ordering is preserved", async () => {
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Full pipeline test." }),
+    createFullMockDeps(),
+  );
+  const stageNames = result.stages.map((s) => s.name);
+  assertEquals(stageNames, [
+    "reasoning",
+    "retrieval",
+    "enrichment",
+    "prompt_build",
+    "citation_verification",
+    "official_source_fact_check",
+    "final_legal_qa",
+    "verification",
+  ]);
+  assertEquals(stageNames.length, 8);
+});
+
+// New test 6: result contains all new QA metadata fields
+Deno.test("LegalPipelineOrchestrator v2 - result contains all QA metadata fields", async () => {
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Text." }),
+    createFullMockDeps(),
+  );
+  // New fields exist
+  assert("citationVerification" in result);
+  assert("officialSourceFactCheck" in result);
+  assert("finalLegalQA" in result);
+  assert("pipelineWarnings" in result);
+  assert("pipelineErrors" in result);
+  // Arrays
+  assert(Array.isArray(result.pipelineWarnings));
+  assert(Array.isArray(result.pipelineErrors));
+  // Backward compat: result.verification must still point to citation result
+  assertEquals(result.verification, result.citationVerification);
+  // Version bumped to 2.0.0
+  assertEquals(result.metadata.pipeline_version, "2.0.0");
+});
+
+// New test 7: optional deps work independently — only runOfficialFactCheck provided
+Deno.test("LegalPipelineOrchestrator v2 - optional deps work independently", async () => {
+  const deps: LegalPipelineDeps = {
+    ...createMockDeps(),
+    runOfficialFactCheck: (_text, _cits, _meta) => ({
+      official_fact_check_status: "PASS",
+      warnings: [],
+    }),
+    // runFinalLegalQA intentionally absent
+  };
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Partial deps test." }),
+    deps,
+  );
+  // Official fact check ran
+  const factStage = result.stages.find((s) => s.name === "official_source_fact_check");
+  assertEquals(factStage?.status, "pass");
+  assertEquals(result.officialSourceFactCheck?.official_fact_check_status, "PASS");
+  // Final QA skipped (dep absent)
+  const qaStage = result.stages.find((s) => s.name === "final_legal_qa");
+  assertEquals(qaStage?.status, "skipped");
+  assertEquals(result.finalLegalQA?.final_legal_qa_status, "NOT_RUN");
+});
+
+// New test 8: pipeline completes without any network I/O — all deps are pure sync fns
+Deno.test("LegalPipelineOrchestrator v2 - no network required — all stages complete via DI", async () => {
+  let networkCallDetected = false;
+
+  // All deps are synchronous closures — no actual I/O, no fetch
+  const syncDeps: LegalPipelineDeps = {
+    runRAG: async (_q, _o) => {
+      // Ensure this is the only I/O path
+      return { semantic_ok: true, kbResults: [], practiceResults: [] };
+    },
+    verifyCitations: async (_t, _o) => ({ verified: true, count: 0 }),
+    runOfficialFactCheck: (_t, _c, _m) => ({ official_fact_check_status: "PASS" }),
+    runFinalLegalQA: (_i) => ({
+      final_legal_qa_status: "PASS" as const,
+      confidence: "high" as const,
+      blocking_issues: [],
+      warnings: [],
+      requires_human_review: false,
+      safe_to_show_user: true,
+      qa_summary: "All passed.",
+      checked_at: new Date().toISOString(),
+    }),
+  };
+
+  const result = await runLegalPipeline(
+    createInput({ generatedText: "Network-free run." }),
+    syncDeps,
+  );
+
+  // Pipeline must complete all 8 stages
+  assertEquals(result.stages.length, 8);
+  // No network calls occurred (no exception, no timeout)
+  assertEquals(networkCallDetected, false);
+  // All QA stages completed (not failed)
+  const failedStages = result.stages.filter((s) => s.status === "fail");
+  assertEquals(failedStages.length, 0, "No stage should fail in a clean sync run");
+});

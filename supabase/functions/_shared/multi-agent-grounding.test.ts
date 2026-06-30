@@ -51,4 +51,5 @@ Deno.test("multi-agent grounding: extracts legal issues before retrieval", () =>
   const issues = extractLegalIssues("Evidence admissibility and ECHR fair trial issue", "criminal");
   assertEquals(issues.includes("criminal"), true);
   assertEquals(issues.includes("evidence_admissibility"), true);
-  assertEquals(issues.includes("echr_right
+  assertEquals(issues.includes("echr_rights"), true);
+});
