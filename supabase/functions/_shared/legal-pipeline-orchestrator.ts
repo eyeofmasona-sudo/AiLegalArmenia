@@ -594,12 +594,4 @@ export async function runLegalPipeline(
     "final_legal_qa",
   ]);
   result.stages
-    .filter((s) => qaStageNames.has(s.name))
-    .forEach((s) => {
-      result.pipelineWarnings.push(...s.warnings);
-      result.pipelineErrors.push(...s.errors);
-    });
-
-  result.metadata.pipeline_duration_ms = Date.now() - startTime;
-  return result;
-}
+    .filter((s) =

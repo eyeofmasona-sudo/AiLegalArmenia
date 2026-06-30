@@ -27,6 +27,7 @@ import { buildLegalCorePrompt, LEGAL_CORE_RESPONSE_HEADER } from "../_shared/leg
 import { buildLegalReasoningContext, buildReasoningSearchQuery, runLegalReasoningEngine } from "../_shared/legal-reasoning-engine.ts";
 import { buildTemporalContextForPrompt } from "../_shared/temporal-validity-engine.ts";
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
+import { isQABlocked, QA_BLOCK_MESSAGE_HY, type FinalLegalQALike } from "../_shared/qa-block-guard.ts";
 
 // =============================================================================
 // CORS HEADERS (wildcard for browser compatibility)
@@ -352,52 +353,4 @@ Use the legal sources and court practice above to strengthen legal argumentation
 
     const qaResult = await runLegalPipeline({
       mode: "document",
-      userQuery: `${request.templateName} ${request.category} ${request.subcategory || ""}`,
-      caseText: contextText,
-      documentText: typeof request.sourceText === "string" ? request.sourceText : "",
-      caseType: request.category,
-      language: request.language || "hy",
-      effectiveAt: referenceDate,
-      functionContext: "generate-document",
-      generatedText: generatedContent,
-    }, qaDeps);
-
-    const citationValidation = qaResult.citationVerification as CitationValidation | null;
-    log("generate-document", "QA chain complete", {
-      citationRisk: citationValidation?.citation_risk_level,
-      officialStatus: qaResult.officialSourceFactCheck?.official_fact_check_status,
-      finalQAStatus: qaResult.finalLegalQA?.final_legal_qa_status,
-    });
-
-    return new Response(
-      JSON.stringify({
-        content: generatedContent,
-        tokensUsed: 0,
-        role: request.role || "default",
-        jurisdiction,
-        model_used: modelUsed,
-        ...LEGAL_CORE_RESPONSE_HEADER,
-        temporal_validity_checked: !!referenceDate,
-        legal_reasoning: legalReasoning,
-        // QA metadata — all from Orchestrator v2 (Phase 6.9)
-        validation: citationValidation,
-        verified_citations: citationValidation?.verified_citations,
-        weak_citations: citationValidation?.weak_citations,
-        missing_citations: citationValidation?.missing_citations,
-        citation_risk_level: citationValidation?.citation_risk_level,
-        official_source_fact_check: qaResult.officialSourceFactCheck,
-        final_legal_qa: qaResult.finalLegalQA,
-        pipeline_metadata: qaResult.metadata,
-        pipeline_warnings: qaResult.pipelineWarnings,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-
-  } catch (error) {
-    err("generate-document", "Unhandled error", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
-});
+      userQuery: `${request.

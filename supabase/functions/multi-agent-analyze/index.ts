@@ -17,6 +17,7 @@ import {
 } from "../_shared/official-source-fact-checker.ts";
 import { runFinalLegalQA, type FinalLegalQAResult } from "../_shared/final-legal-qa-agent.ts";
 import { buildLegalCorePrompt, LEGAL_CORE_RESPONSE_HEADER } from "../_shared/legal-core-prompt.ts";
+import { isQABlocked, QA_BLOCK_MESSAGE_HY, buildBlockedAgentResult } from "../_shared/qa-block-guard.ts";
 import { buildLegalReasoningContext } from "../_shared/legal-reasoning-engine.ts";
 
 import { handleCors } from "../_shared/edge-security.ts";
@@ -1129,8 +1130,22 @@ serve(async (req) => {
         legalReasoningRiskFlags: grounding.legal_reasoning.risk_flags,
       });
 
+      // ── Phase 7.5A: Hard QA Block (single_file) ──────────────────────────
+      const singleFileBlocked = isQABlocked(finalLegalQA);
+      const publicParsedFileResult = singleFileBlocked
+        ? buildBlockedAgentResult()
+        : parsedFileResult;
+      if (singleFileBlocked) {
+        console.warn(JSON.stringify({
+          ts: new Date().toISOString(), lvl: "warn", fn: "multi-agent",
+          msg: "QA BLOCKED (single_file) — content withheld",
+          finalQAStatus: finalLegalQA.final_legal_qa_status,
+          safeToShowUser: finalLegalQA.safe_to_show_user,
+        }));
+      }
+
       return new Response(JSON.stringify({
-        ...parsedFileResult,
+        ...publicParsedFileResult,
         tokensUsed: fileTokens,
         agentType,
         mode: "single_file",
@@ -1216,236 +1231,4 @@ serve(async (req) => {
     // Add previous analyses for aggregator
     if (agentType === "aggregator" && previousRuns && previousRuns.length > 0) {
       contextParts.push("\n\u0531\u0533\u0535\u0546\u054f\u0546\u0535\u0550\u053b \u054e\u0535\u0550\u053c\u0548\u0552\u053e\u0548\u0552\u0539\u0545\u0548\u0552\u0546\u0546\u0535\u0550:");
-      for (const run of previousRuns) {
-        contextParts.push(`\n--- ${run.agent_type} ---`);
-        if (run.summary) {
-          contextParts.push(`\u0531\u0574\u0583\u0578\u0583\u0578\u0582\u0574: ${run.summary}`);
-        }
-        if (run.analysis_result) {
-          // Limit analysis text
-          contextParts.push(run.analysis_result.substring(0, 5000));
-        }
-      }
-    }
-
-    const preGroundingFacts = contextParts.join("\n");
-    const grounding = await runPreAnalysisGrounding({
-      supabase,
-      supabaseUrl,
-      supabaseKey,
-      agentType,
-      mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-      caseType: caseData.case_type || null,
-      caseTitle: caseData.title || null,
-      caseNumber: caseData.case_number || null,
-      factsText: preGroundingFacts,
-      legalQuestion: caseData.legal_question || null,
-      referenceDate: caseReferenceDate,
-      previousRuns: previousRuns || [],
-    });
-    if (!grounding.ok) {
-      const officialFactCheck = buildOfficialSourceFactCheckNotRun("grounding_stop_before_official_source_fact_check");
-      const finalLegalQA = buildGroundingFinalQA(
-        "INSUFFICIENT_LEGAL_GROUNDING",
-        agentType,
-        agentType === "aggregator" ? "aggregator" : "agent_run",
-        grounding as unknown as Record<string, unknown>,
-      );
-      return new Response(JSON.stringify({
-        ...buildGroundingStopResponse(grounding),
-        tokensUsed: 0,
-        agentType,
-        mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-        ...LEGAL_CORE_RESPONSE_HEADER,
-        temporal_validity_checked: !!caseReferenceDate,
-        official_source_fact_check: officialFactCheck,
-        final_legal_qa: finalLegalQA,
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    contextParts.push(buildGroundingBlock(grounding, preGroundingFacts));
-
-    const userMessage = contextParts.join("\n") + (userSourcesBlock ? "\n" + userSourcesBlock : "");
-    const systemPrompt = buildLegalCorePrompt({
-      functionName: "multi-agent-analyze",
-      role: agentType,
-      temporalValidityChecked: !!caseReferenceDate,
-      legalReasoningContext: buildLegalReasoningContext(grounding.legal_reasoning),
-    }) + "\n\n" + (AGENT_PROMPTS[agentType] || AGENT_PROMPTS.evidence_collector) +
-      "\n\nMANDATORY: Use only citations listed in allowed_citation_ids from MANDATORY_PRE_ANALYSIS_GROUNDING. If no retrieved source supports a legal conclusion, return INSUFFICIENT_LEGAL_GROUNDING and stop. Aggregator must not create new citations; it may only reuse verified citations from prior agents.\n" +
-      (userSourcesBlock ? "\n\nWhen user-selected sources are provided, you MUST cite them by docId and chunkIndex in your analysis. These sources are mandatory references.\n" : "");
-
-    // Route via centralized OpenAI router
-    const { callText } = await import("../_shared/openai-router.ts");
-
-    let content: string;
-    let tokensUsed = 0;
-    let modelUsed = "unknown";
-    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
-    try {
-      const result = await callText("multi-agent-analyze", [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ]);
-      content = result.text;
-      usage = result.usage;
-      tokensUsed = usage?.total_tokens ?? 0;
-      modelUsed = result.model_used;
-      console.log(JSON.stringify({ ts: new Date().toISOString(), lvl: "info", fn: "multi-agent", model: modelUsed, latency_ms: result.latency_ms }));
-    } catch (routerErr) {
-      const status = (routerErr as { status?: number })?.status;
-      if (status === 429) {
-        return new Response(JSON.stringify({
-          error: "Rate limit exceeded",
-          final_legal_qa: buildFinalQANotRun("rate_limit_exceeded"),
-        }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      if (status === 402) {
-        return new Response(JSON.stringify({
-          error: "AI credits exhausted",
-          final_legal_qa: buildFinalQANotRun("ai_credits_exhausted"),
-        }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      throw new Error(`AI router error: ${String(routerErr)}`);
-    }
-
-    // Parse JSON response
-    let parsedResult: { summary: string; analysis: string; findings: unknown[]; evidenceItems: unknown[]; [key: string]: unknown } = {
-      summary: "",
-      analysis: content,
-      findings: [],
-      evidenceItems: []
-    };
-
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsedResult = { ...parsedResult, ...JSON.parse(jsonMatch[0]) };
-      }
-    } catch (e) {
-      console.error(JSON.stringify({ ts: new Date().toISOString(), lvl: "error", fn: "multi-agent", msg: "JSON parse failed" }));
-      parsedResult.analysis = content;
-    }
-
-    // Log usage
-    const { computeCost: computeMultiAgentCost } = await import("../_shared/rate-limiter.ts");
-    const inputTokensEst = usage?.prompt_tokens || Math.round(tokensUsed * 0.7);
-    const outputTokensEst = usage?.completion_tokens || Math.round(tokensUsed * 0.3);
-    const { cost_usd: multiAgentCostUsd } = computeMultiAgentCost(modelUsed, inputTokensEst, outputTokensEst);
-    await recordAiMetric(supabase, {
-      fnName: "multi-agent-analyze",
-      model: modelUsed,
-      inputTokens: inputTokensEst,
-      outputTokens: outputTokensEst,
-      totalTokens: tokensUsed,
-      costUsd: multiAgentCostUsd,
-      status: "success",
-      caseId,
-      userId: user.id,
-    });
-
-    // === Citation Guard (unified engine, annotate policy) ===
-    const validation = await verifyCitationsInText(content, supabase, {
-      skipIds: [caseId, user.id],
-      fn: "multi-agent",
-      mode: "markers",
-      referenceDate: caseReferenceDate,
-    });
-    if (!validation.citations_verified) {
-      console.warn(JSON.stringify({
-        ts: new Date().toISOString(), lvl: "warn", fn: "multi-agent",
-        msg: "CITATION_GUARD: unverified citations",
-        reason: validation.reason,
-        missing_ids: validation.missing_ids,
-        cited_ids_count: validation.cited_ids_count,
-      }));
-    }
-    const outsideGrounding = findCitationsOutsideGrounding(extractCitedIds(content, "markers"), grounding);
-    if (outsideGrounding.length > 0) {
-      const officialFactCheck = runOfficialSourceFactCheckStub({
-        analysisText: content,
-        citations: Object.keys(validation.verified_citations || {}).concat(validation.missing_ids || []),
-        metadata: {
-          agentType,
-          mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-          groundingOk: grounding.ok,
-        },
-      });
-      const finalLegalQA = buildGroundingFinalQA(
-        content,
-        agentType,
-        agentType === "aggregator" ? "aggregator" : "agent_run",
-        grounding as unknown as Record<string, unknown>,
-        validation as unknown as Record<string, unknown>,
-        officialFactCheck as unknown as Record<string, unknown>,
-      );
-      return new Response(JSON.stringify({
-        ...buildGroundingStopResponse(grounding, "Model cited sources outside mandatory grounding."),
-        tokensUsed,
-        agentType,
-        mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-        ...LEGAL_CORE_RESPONSE_HEADER,
-        temporal_validity_checked: !!caseReferenceDate,
-        invalid_citation_ids: outsideGrounding,
-        validation,
-        official_source_fact_check: officialFactCheck,
-        final_legal_qa: finalLegalQA,
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const officialFactCheck = runOfficialSourceFactCheckStub({
-      analysisText: content,
-      citations: Object.keys(validation.verified_citations || {}).concat(validation.missing_ids || []),
-      metadata: {
-        agentType,
-        mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-        groundingOk: grounding.ok
-      }
-    });
-
-    const finalLegalQA = runFinalLegalQA({
-      generatedText: content,
-      agentType,
-      mode: agentType === "aggregator" ? "aggregator" : "agent_run",
-      citationValidation: validation,
-      officialSourceFactCheck: officialFactCheck,
-      sourceHierarchy: grounding.legal_reasoning.source_hierarchy,
-      temporalValidations: grounding.legal_reasoning.temporal_validation.validated_sources,
-      courtPractice: grounding.legal_reasoning.court_practice ?? null,
-      groundingOk: grounding.ok,
-      groundingStopCode: grounding.stop_code,
-      legalReasoningRiskFlags: grounding.legal_reasoning.risk_flags,
-    });
-
-    return new Response(JSON.stringify({
-      ...parsedResult,
-      tokensUsed,
-      agentType,
-      ...LEGAL_CORE_RESPONSE_HEADER,
-      temporal_validity_checked: !!caseReferenceDate,
-      validation,
-      verified_citations: validation.verified_citations,
-      weak_citations: validation.weak_citations,
-      missing_citations: validation.missing_citations,
-      citation_risk_level: validation.citation_risk_level,
-      grounding,
-      official_source_fact_check: officialFactCheck,
-      final_legal_qa: finalLegalQA,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
-  } catch (error) {
-    console.error(JSON.stringify({ ts: new Date().toISOString(), lvl: "error", fn: "multi-agent", msg: error instanceof Error ? error.message : "Agent failed" }));
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : "Agent execution failed",
-      final_legal_qa: buildFinalQANotRun("agent_execution_failed"),
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-});
+      for (con

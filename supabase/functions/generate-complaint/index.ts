@@ -14,6 +14,7 @@ import { buildLegalCorePrompt, LEGAL_CORE_RESPONSE_HEADER } from "../_shared/leg
 import { buildLegalReasoningContext, buildReasoningSearchQuery, runLegalReasoningEngine } from "../_shared/legal-reasoning-engine.ts";
 import { buildTemporalContextForPrompt } from "../_shared/temporal-validity-engine.ts";
 import { runOfficialSourceFactCheckStub } from "../_shared/official-source-fact-checker.ts";
+import { isQABlocked, QA_BLOCK_MESSAGE_HY, type FinalLegalQALike } from "../_shared/qa-block-guard.ts";
 
 // =============================================================================
 // CORS HEADERS (wildcard for browser compatibility)
@@ -397,58 +398,4 @@ ${userSourcesBlock ? "When user-selected sources are provided, you MUST cite the
       generatedText: generatedContent,
     }, qaDeps);
 
-    const citationValidation = qaResult.citationVerification as CitationValidation | null;
-    log("generate-complaint", "QA chain complete", {
-      citationRisk: citationValidation?.citation_risk_level,
-      officialStatus: qaResult.officialSourceFactCheck?.official_fact_check_status,
-      finalQAStatus: qaResult.finalLegalQA?.final_legal_qa_status,
-    });
-
-    return new Response(
-      JSON.stringify({
-        content: generatedContent,
-        tokensUsed: routerResult.usage?.total_tokens || 0,
-        courtType: request.courtType,
-        category: request.category,
-        ragSourcesUsed: kbContext.length > 0 || legalPracticeContext.length > 0,
-        legalPracticeUsed: legalPracticeContext.length > 0,
-        anonymized: anonymize,
-        ...LEGAL_CORE_RESPONSE_HEADER,
-        temporal_validity_checked: !!referenceDate,
-        legal_reasoning: legalReasoning,
-        retrievedPrecedents: retrievedPrecedents.map((p) => ({
-          id: p.id,
-          court_type: p.court_type,
-          title: p.title,
-          quotes: p.quotes,
-        })),
-        precedentCount: retrievedPrecedents.length,
-        citedPrecedentIds: citedIds,
-        precedent_guard: {
-          allowedIds: [...allowedIds],
-          invalidIds,
-          maxExceeded: citedIds.length > 6,
-          status: invalidIds.length === 0 && citedIds.length <= 6 ? "ok" : "unverified",
-        },
-        // QA metadata — all from Orchestrator v2 (Phase 6.9)
-        validation: citationValidation,
-        verified_citations: citationValidation?.verified_citations,
-        weak_citations: citationValidation?.weak_citations,
-        missing_citations: citationValidation?.missing_citations,
-        citation_risk_level: citationValidation?.citation_risk_level,
-        official_source_fact_check: qaResult.officialSourceFactCheck,
-        final_legal_qa: qaResult.finalLegalQA,
-        pipeline_metadata: qaResult.metadata,
-        pipeline_warnings: qaResult.pipelineWarnings,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-
-  } catch (error) {
-    err("generate-complaint", "Unhandled error", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
-});
+  

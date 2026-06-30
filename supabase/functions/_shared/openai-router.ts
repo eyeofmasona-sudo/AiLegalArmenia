@@ -41,10 +41,10 @@ export interface GovernanceMeta {
 export const MODEL_MAP: Record<string, ModelConfig> = {
   // ── Primary legal reasoning ───────────────────────────────────────────────
   "ai-analyze": {
-    model: "anthropic/claude-3.5-sonnet",
+    model: "anthropic/claude-sonnet-4",
     temperature: 0.15,
     max_tokens: 14000,
-    description: "Case analysis (Claude 3.5 Sonnet)",
+    description: "Case analysis (Claude Sonnet 4)",
   },
   "multi-agent-analyze": {
     model: "anthropic/claude-3.5-sonnet",
@@ -203,10 +203,10 @@ const ROLE_OVERRIDES: Record<string, Partial<ModelConfig>> = {
   "ai-analyze:legal_position_comparator": { description: "Comparator" },
   // ── Deterministic draft (temp=0) ───────────────────────────────────────────
   "ai-analyze:draft_deterministic": {
-    model: "anthropic/claude-3.5-sonnet",
+    model: "anthropic/claude-sonnet-4",
     temperature: 0,
     max_tokens: 14000,
-    description: "Deterministic draft (Claude 3.5 Sonnet temp=0)",
+    description: "Deterministic draft (Claude Sonnet 4 temp=0)",
   },
   // ── JSON roles (Gemini Pro) ─────────────────────────────────────────────
   "ai-analyze:precedent_citation": {
@@ -872,3 +872,4 @@ function validateSchema<T>(parsed: unknown, schema: Record<string, unknown>): T 
 
   return obj as T;
 }
+        

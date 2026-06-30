@@ -590,36 +590,4 @@ serve(async (req) => {
           controller.enqueue(encoder.encode(`event: legal_reasoning\ndata: ${JSON.stringify(legalReasoning)}\n\n`));
           controller.enqueue(encoder.encode(`event: pipeline_metadata\ndata: ${JSON.stringify(qaResult.metadata)}\n\n`));
           controller.enqueue(encoder.encode(`event: citation_validation\ndata: ${JSON.stringify(citationVerification)}\n\n`));
-          controller.enqueue(encoder.encode(`event: citation_verification\ndata: ${JSON.stringify(citationVerification)}\n\n`));
-          controller.enqueue(encoder.encode(`event: official_source_fact_check\ndata: ${JSON.stringify(qaResult.officialSourceFactCheck)}\n\n`));
-          controller.enqueue(encoder.encode(`event: final_legal_qa\ndata: ${JSON.stringify(qaResult.finalLegalQA)}\n\n`));
-          controller.enqueue(encoder.encode(`event: pipeline_warnings\ndata: ${JSON.stringify(qaResult.pipelineWarnings)}\n\n`));
-          controller.enqueue(encoder.encode(`event: pipeline_errors\ndata: ${JSON.stringify(qaResult.pipelineErrors)}\n\n`));
-        } catch (validationErr) {
-          err(FN, "Citation validation failed", validationErr);
-        }
-
-        if (sawDone) {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        }
-      },
-    });
-
-    // Pipe the AI response through our counting transform
-    response.body!.pipeTo(writable).catch(() => {});
-
-    // Return the transformed stream
-    return new Response(readable, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
-
-  } catch (error) {
-    err(FN, "Unhandled error", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
-});
-
-// sanitizeForPostgrest moved to _shared/rag-search.ts
+          controller.enqueue(encoder.encode(`event: citation_verification

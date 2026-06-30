@@ -449,8 +449,3 @@ export function buildReasoningSearchQuery(engine: LegalReasoningOutput, fallback
     .replace(/\s+/g, " ")
     .trim() || fallback;
 }
-
-import { buildCuratedLegalPromptContext } from "./legal-prompt-serializer.ts";
-export function buildCuratedLegalReasoningContext(engine: LegalReasoningOutput): string {
-  return buildCuratedLegalPromptContext(engine);
-}

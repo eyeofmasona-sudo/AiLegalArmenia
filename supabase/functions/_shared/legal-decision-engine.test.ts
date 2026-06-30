@@ -6,9 +6,11 @@ import {
 
 import {
   buildDecisionActionPlan,
+  buildDecisionVersionMaterial,
   buildDecisionVerificationState,
   buildLegalDecisionObject,
   calculateDecisionConfidence,
+  computeDecisionVersionHash,
   detectDecisionContradictions,
   extractMissingInformation,
   type LegalDecisionInput,
@@ -204,13 +206,102 @@ Deno.test("decision object is deterministic for same input", () => {
   assertEquals(buildLegalDecisionObject(input), buildLegalDecisionObject(input));
 });
 
-Deno.test("version_hash changes when input changes", () => {
+Deno.test("version_hash changes when material input changes", () => {
   const first = buildLegalDecisionObject(cleanInput());
   const second = buildLegalDecisionObject(cleanInput({
-    legal_position: "Different supported legal position.",
+    facts: {
+      confirmed_facts: ["contract signed", "payment missed"],
+      disputed_facts: [],
+      missing_facts: [],
+    },
   }));
 
   assertNotEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("same input with different generated prose produces same version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput({
+    legal_position: "The claim is supported by the retrieved sources.",
+  }));
+  const second = buildLegalDecisionObject(cleanInput({
+    legal_position: "Different wording with the same legal state and verification metadata.",
+  }));
+
+  assertEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("same input with different created_at produces same version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput({ generated_at: "2026-06-30T00:00:00.000Z" }));
+  const second = buildLegalDecisionObject(cleanInput({ generated_at: "2026-07-01T00:00:00.000Z" }));
+
+  assertEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("changed citation status changes version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput());
+  const second = buildLegalDecisionObject(cleanInput({
+    citation_validation: {
+      citation_risk_level: "medium",
+      citations_verified: false,
+      missing_citations: [],
+      weak_citations: ["article reference"],
+    },
+  }));
+
+  assertNotEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("changed final QA status changes version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput());
+  const second = buildLegalDecisionObject(cleanInput({
+    final_legal_qa: { final_legal_qa_status: "WARNING", warnings: ["needs caution"] },
+  }));
+
+  assertNotEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("changed controlling source changes version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput({
+    temporal_validations: [{ id: "source-a", title: "Civil Code", temporal_status: "current_valid" }],
+  }));
+  const second = buildLegalDecisionObject(cleanInput({
+    temporal_validations: [{ id: "source-b", title: "Labor Code", temporal_status: "current_valid" }],
+  }));
+
+  assertNotEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("array ordering noise does not change version_hash", () => {
+  const first = buildLegalDecisionObject(cleanInput({
+    facts: {
+      confirmed_facts: ["contract signed", "notice delivered"],
+      disputed_facts: [],
+      missing_facts: [],
+    },
+    issues: ["damages", "contract performance"],
+  }));
+  const second = buildLegalDecisionObject(cleanInput({
+    facts: {
+      confirmed_facts: ["notice delivered", "contract signed"],
+      disputed_facts: [],
+      missing_facts: [],
+    },
+    issues: ["contract performance", "damages"],
+  }));
+
+  assertEquals(first.version_hash, second.version_hash);
+});
+
+Deno.test("material legal change changes version_hash", () => {
+  const firstMaterial = buildDecisionVersionMaterial(cleanInput());
+  const secondMaterial = buildDecisionVersionMaterial(cleanInput({
+    source_hierarchy: {
+      conflicts: [{ type: "unresolved_conflict", severity: "high", warning: "statute conflict" }],
+      source_use_warnings: [],
+    },
+  }));
+
+  assertNotEquals(computeDecisionVersionHash(firstMaterial), computeDecisionVersionHash(secondMaterial));
 });
 
 Deno.test("no network DB LLM or env usage", async () => {

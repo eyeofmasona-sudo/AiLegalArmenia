@@ -1,31 +1,53 @@
-# Dependencies
-node_modules/
-.venv/
-venv/
-__pycache__/
-
-# Builds
-dist/
-build/
-.next/
-.turbo/
-out/
-
-# Caches
-.cache/
-coverage/
-.eslintcache
-
-# Environment
+# Environment variables (secrets)
 .env
+.env.local
+.env.*.local
+# Catch every real env-file variant (.env.production, .env.vps, etc.) ...
 .env.*
+# ... but keep tracked example/placeholder files.
+!.env.example
+!.env.*.example
 
 # Logs
+logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# System
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
 .DS_Store
-Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Supabase temp files (contains sensitive credentials and CLI artifacts)
+supabase/.temp/
+
+# Large data files (embeddings, benchmarks, practice data)
+data/
+
+# Local pipelines outputs / caches (should not be committed)
+output/
+temp/
+
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local sqlite caches
+*.sqlite

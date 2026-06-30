@@ -144,6 +144,8 @@ export interface LegalDecisionInput {
   generated_at?: string | null;
 }
 
+export type LegalDecisionVersionMaterial = Record<string, unknown>;
+
 const FIXED_CREATED_AT = "1970-01-01T00:00:00.000Z";
 const INVALID_TEMPORAL_STATUSES = new Set(["expired", "repealed", "not_yet_effective"]);
 const UNRESOLVED_CONFLICT_TYPES = new Set([
@@ -153,6 +155,50 @@ const UNRESOLVED_CONFLICT_TYPES = new Set([
   "inactive_source",
   "old_revision_without_warning",
 ]);
+
+const TRANSIENT_VERSION_KEYS = new Set([
+  "analysis",
+  "ai_response",
+  "checked_at",
+  "created_at",
+  "decision_id",
+  "duration_ms",
+  "elapsed_ms",
+  "generated_at",
+  "generated_text",
+  "legal_position",
+  "llm_output",
+  "model_used",
+  "pipeline_duration",
+  "pipeline_errors",
+  "pipeline_metadata",
+  "pipeline_warnings",
+  "qa_pipeline_version",
+  "raw_text",
+  "repository_record_id",
+  "response_text",
+  "supersedes_decision_id",
+  "updated_at",
+]);
+
+export function buildDecisionVersionMaterial(input: LegalDecisionInput): LegalDecisionVersionMaterial {
+  return normalizeMaterialForHash({
+    case_id: input.case_id ?? null,
+    material_assessments: input.expert_assessments ?? {},
+    final_legal_qa: input.final_legal_qa ?? null,
+    citation_validation: input.citation_validation ?? null,
+    official_source_fact_check: input.official_source_fact_check ?? null,
+    temporal_validations: input.temporal_validations ?? [],
+    source_hierarchy: input.source_hierarchy ?? null,
+    court_practice: input.court_practice ?? null,
+    facts: input.facts ?? null,
+    issues: input.issues ?? [],
+  }) as LegalDecisionVersionMaterial;
+}
+
+export function computeDecisionVersionHash(material: LegalDecisionVersionMaterial): string {
+  return stableHash(canonicalizeForHash(material));
+}
 
 export function buildLegalDecisionObject(input: LegalDecisionInput): LegalDecisionObject {
   const confidence = calculateDecisionConfidence(input);
@@ -171,18 +217,7 @@ export function buildLegalDecisionObject(input: LegalDecisionInput): LegalDecisi
     missingInformation,
     status,
   );
-  const canonical = canonicalize({
-    case_id: input.case_id ?? null,
-    legal_position: normalizeText(input.legal_position),
-    expert_assessments: input.expert_assessments ?? {},
-    confidence,
-    risks,
-    contradictions,
-    missingInformation,
-    verificationState,
-    status,
-  });
-  const version_hash = stableHash(canonical);
+  const version_hash = computeDecisionVersionHash(buildDecisionVersionMaterial(input));
 
   return {
     decision_id: `decision_${version_hash.slice(0, 16)}`,
@@ -581,12 +616,46 @@ function canonicalize(value: unknown): string {
   return JSON.stringify(sortValue(value));
 }
 
+function canonicalizeForHash(value: unknown): string {
+  return JSON.stringify(sortValueForHash(value));
+}
+
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortValue);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
       out[key] = sortValue((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function normalizeMaterialForHash(value: unknown): unknown {
+  if (typeof value === "string") return normalizeText(value);
+  if (Array.isArray(value)) return value.map(normalizeMaterialForHash).filter((item) => item !== undefined);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (TRANSIENT_VERSION_KEYS.has(key)) continue;
+      const normalized = normalizeMaterialForHash(raw);
+      if (normalized !== undefined) out[key] = normalized;
+    }
+    return out;
+  }
+  if (value === undefined) return undefined;
+  return value;
+}
+
+function sortValueForHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortValueForHash).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      out[key] = sortValueForHash((value as Record<string, unknown>)[key]);
     }
     return out;
   }

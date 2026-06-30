@@ -1,4 +1,21 @@
+/**
+ * Legal Decision Repository — Phase 7.1 / Phase 7.5B
+ *
+ * Phase 7.5B: saveLegalDecisionSnapshot replaced with a single RPC call to
+ * app.save_legal_decision_atomic (migration 20260630123000).  The Postgres
+ * function acquires an advisory lock on the case_id, clears the previous
+ * is_latest row, and inserts the new snapshot — all inside one transaction.
+ *
+ * Atomic guarantee: at most one is_latest = true row exists per case_id at
+ * any moment, even under concurrent callers.
+ *
+ * Public signatures are unchanged from Phase 7.1 so all callers (ai-analyze,
+ * tests) continue to work without modification.
+ */
+
 import type { LegalDecisionObject, LegalDecisionStatus } from "./legal-decision-engine.ts";
+
+// ── Shared types ──────────────────────────────────────────────────────────────
 
 export interface LegalDecisionRow {
   id: string;
@@ -30,14 +47,25 @@ export interface SaveLegalDecisionResult extends LegalDecisionRepositoryResult<L
   superseded_decision_id: string | null;
 }
 
+// ── Client interface ──────────────────────────────────────────────────────────
+
 export interface LegalDecisionRepositoryClient {
   schema?: (schema: string) => LegalDecisionRepositoryClient;
   from: (table: string) => LegalDecisionQueryBuilder;
+  /**
+   * Phase 7.5B: rpc is required for atomic snapshot saves.
+   * Real Supabase client always provides this.  Test mocks must also implement it.
+   */
+  rpc: (
+    fn: string,
+    args: Record<string, unknown>,
+  ) => Promise<LegalDecisionRepositoryResult<unknown>>;
 }
 
 interface SupabaseLikeClient extends LegalDecisionRepositoryClient {}
 
-export interface LegalDecisionQueryBuilder extends PromiseLike<LegalDecisionRepositoryResult<unknown>> {
+export interface LegalDecisionQueryBuilder
+  extends PromiseLike<LegalDecisionRepositoryResult<unknown>> {
   select: (columns?: string) => LegalDecisionQueryBuilder;
   eq: (column: string, value: unknown) => LegalDecisionQueryBuilder;
   order: (column: string, options?: { ascending?: boolean }) => LegalDecisionQueryBuilder;
@@ -48,6 +76,24 @@ export interface LegalDecisionQueryBuilder extends PromiseLike<LegalDecisionRepo
   update: (values: Record<string, unknown>) => LegalDecisionQueryBuilder;
 }
 
+// ── saveLegalDecisionSnapshot — atomic via RPC (Phase 7.5B) ──────────────────
+
+/**
+ * Atomically saves a Legal Decision snapshot.
+ *
+ * Delegates to app.save_legal_decision_atomic which runs inside a single
+ * Postgres transaction with an advisory lock on case_id:
+ *   1. Advisory lock — serializes all concurrent saves for the same case
+ *   2. Duplicate check — returns existing row if version_hash already exists
+ *   3. UPDATE previous is_latest → false (before insert, no overlap window)
+ *   4. INSERT new row with is_latest = true
+ *
+ * The partial unique index (legal_decisions_single_latest_idx) provides an
+ * additional DB-level guarantee that at most one is_latest = true exists
+ * per case_id.
+ *
+ * Public signature unchanged from Phase 7.1.
+ */
 export async function saveLegalDecisionSnapshot(
   client: SupabaseLikeClient,
   decision: LegalDecisionObject,
@@ -64,75 +110,33 @@ export async function saveLegalDecisionSnapshot(
     };
   }
 
-  const existing = await findByCaseAndHash(client, caseId, decision.version_hash);
-  if (existing.error) return saveError(existing.error);
-  if (existing.data) {
-    return {
-      data: existing.data,
-      error: null,
-      inserted: false,
-      duplicate: true,
-      superseded_decision_id: existing.data.supersedes_decision_id,
-    };
+  const rpcResult = await client.rpc("save_legal_decision_atomic", {
+    p_case_id: caseId,
+    p_version_hash: decision.version_hash,
+    p_decision_status: decision.status,
+    p_decision_data: cloneJson(decision) as unknown as Record<string, unknown>,
+    p_source_pipeline_version: options.sourcePipelineVersion ?? null,
+    p_created_by: options.createdBy ?? null,
+  });
+
+  if (rpcResult.error) {
+    return saveError(rpcResult.error);
   }
 
-  const supersession = await computeDecisionSupersession(client, caseId);
-  if (supersession.error) return saveError(supersession.error);
-
-  const previousLatestId = supersession.data?.id ?? null;
-  const insertPayload = {
-    case_id: caseId,
-    version_hash: decision.version_hash,
-    decision_status: decision.status,
-    decision_data: cloneJson(decision),
-    source_pipeline_version: options.sourcePipelineVersion ?? null,
-    created_by: options.createdBy ?? null,
-    supersedes_decision_id: previousLatestId,
-    is_latest: true,
-  };
-
-  const inserted = await legalDecisionsTable(client)
-    .insert(insertPayload)
-    .select("*")
-    .single();
-
-  if (inserted.error) {
-    if (isUniqueViolation(inserted.error)) {
-      const duplicate = await findByCaseAndHash(client, caseId, decision.version_hash);
-      if (duplicate.data) {
-        return {
-          data: duplicate.data,
-          error: null,
-          inserted: false,
-          duplicate: true,
-          superseded_decision_id: duplicate.data.supersedes_decision_id,
-        };
-      }
-    }
-    return saveError(inserted.error, previousLatestId);
-  }
-
-  if (previousLatestId) {
-    const updatePrevious = await markDecisionNotLatestById(client, previousLatestId);
-    if (updatePrevious.error) {
-      return {
-        data: inserted.data,
-        error: updatePrevious.error,
-        inserted: true,
-        duplicate: false,
-        superseded_decision_id: previousLatestId,
-      };
-    }
-  }
+  const row = rpcResult.data as Record<string, unknown>;
+  const action = row["_action"] as string;
+  const rowData = rpcRowToDecisionRow(row);
 
   return {
-    data: inserted.data,
+    data: rowData,
     error: null,
-    inserted: true,
-    duplicate: false,
-    superseded_decision_id: previousLatestId,
+    inserted: action === "inserted",
+    duplicate: action === "duplicate",
+    superseded_decision_id: rowData.supersedes_decision_id,
   };
 }
+
+// ── Read queries (unchanged from Phase 7.1) ───────────────────────────────────
 
 export async function getLatestLegalDecision(
   client: SupabaseLikeClient,
@@ -158,6 +162,10 @@ export async function listLegalDecisionVersions(
   return result as LegalDecisionRepositoryResult<LegalDecisionRow[]>;
 }
 
+/**
+ * Utility: bulk-marks all is_latest rows for a case as false.
+ * Used for admin/repair scenarios; normal saves go through saveLegalDecisionSnapshot.
+ */
 export async function markPreviousDecisionsNotLatest(
   client: SupabaseLikeClient,
   caseId: string,
@@ -170,57 +178,13 @@ export async function markPreviousDecisionsNotLatest(
   return result as LegalDecisionRepositoryResult<LegalDecisionRow[]>;
 }
 
+/**
+ * Returns the current latest decision for a case (i.e. the row that would
+ * be superseded by the next save).  Kept for callers that need to inspect
+ * supersession state without performing a save.
+ */
 export async function computeDecisionSupersession(
   client: SupabaseLikeClient,
   caseId: string,
 ): Promise<LegalDecisionRepositoryResult<LegalDecisionRow>> {
-  return await getLatestLegalDecision(client, caseId);
-}
-
-async function findByCaseAndHash(
-  client: SupabaseLikeClient,
-  caseId: string,
-  versionHash: string,
-): Promise<LegalDecisionRepositoryResult<LegalDecisionRow>> {
-  return await legalDecisionsTable(client)
-    .select("*")
-    .eq("case_id", caseId)
-    .eq("version_hash", versionHash)
-    .maybeSingle();
-}
-
-async function markDecisionNotLatestById(
-  client: SupabaseLikeClient,
-  decisionId: string,
-): Promise<LegalDecisionRepositoryResult<LegalDecisionRow[]>> {
-  const result = await legalDecisionsTable(client)
-    .update({ is_latest: false })
-    .eq("id", decisionId)
-    .select("*");
-  return result as LegalDecisionRepositoryResult<LegalDecisionRow[]>;
-}
-
-function legalDecisionsTable(client: SupabaseLikeClient): LegalDecisionQueryBuilder {
-  const scoped = typeof client.schema === "function" ? client.schema("app") : client;
-  return scoped.from("legal_decisions");
-}
-
-function cloneJson<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = (error as { code?: unknown }).code;
-  return code === "23505" || code === "409";
-}
-
-function saveError(error: unknown, supersededDecisionId: string | null = null): SaveLegalDecisionResult {
-  return {
-    data: null,
-    error,
-    inserted: false,
-    duplicate: false,
-    superseded_decision_id: supersededDecisionId,
-  };
-}
+  return await getLatestLegalD
